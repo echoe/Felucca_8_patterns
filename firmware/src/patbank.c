@@ -29,6 +29,8 @@ static uint8_t pb_cur[NTRK];             /* the sequence each track plays, 0..7 
 static uint8_t pb_len[PB_NSEQ];          /* LEN of each (the playing one's is the track's P_SLEN) */
 static uint8_t pb_pat[PB_NSEQ][PB_PAT_B] __attribute__((section(".pool")));
 static pb_mo_t pb_mo[PB_NSEQ] __attribute__((section(".pool")));   /* (the playing sequence's: motion) */
+static uint8_t pb_next[NTRK];            /* a switch waiting for the end of the sequence playing: the slot + 1, 0 none (SEQ SWITCH END) */
+static uint8_t pb_last[NTRK];            /* the step each track was on when pb_poll last looked */
 static uint8_t pb_ready;
 static uint8_t pb_dirty;                 /* bit o: the live store's object o is older than the mirror */
 static uint32_t pb_gen;                  /* + 1 per change (autosave_sig) */
@@ -97,6 +99,7 @@ static void pb_clear_all(void)
         memcpy(pb_pat[q], pb_pat[0], PB_PAT_B);
     memset(pb_mo, 0, sizeof pb_mo);
     memset(pb_cur, 0, sizeof pb_cur);
+    memset(pb_next, 0, sizeof pb_next);
     for (q = 0; q < PB_NSEQ; q++)
         pb_len[q] = (uint8_t)TP[P_SLEN].def;
     pb_ready = 1;
@@ -188,9 +191,47 @@ static int pb_select(uint32_t t, uint32_t slot)
     tr->rh_n = tr->rskip_n = 0;
     motion_unguard(f);
     pb_cur[t] = (uint8_t)slot;
+    pb_next[t] = 0;
     pb_dirty |= (uint8_t)(1u << (q / PB_PER) | 1u << (old / PB_PER) | 1u << PB_META_O);
     pb_gen++;
     return 0;
+}
+
+/* a sequence chosen for track t (SEQ > SEQUENCE's knobs, SEQ held + C5..G5). MENU > CONTROL > SEQ SWITCH: NOW at once; END,
+ * while the music plays, at the end of the sequence playing (pb_due). 0 switched, 1 waits, 2 it is the one playing (a
+ * waiting switch is called off), < 0 pb_select's rc, negated */
+static int pb_request(uint32_t t, uint32_t s)
+{
+    int rc;
+    t %= NTRK;
+    pb_need();
+    if (s == pb_cur[t]) {
+        pb_next[t] = 0;
+        return 2;
+    }
+    if ((ui_prefs2 & (PREF_SEQ_END >> 16)) && song.playing && s < PB_N) {
+        pb_next[t] = (uint8_t)(s + 1u);
+        return 1;
+    }
+    rc = pb_select(t, s);
+    return rc ? -rc : 0;
+}
+/* main loop, every pass, per track: its waiting switch happens on the last step of the sequence playing (the next step is
+ * the new one's first), at once when the music is stopped, and late (a wrap seen) when a pass missed the last step.
+ * 1 switched, 0 nothing (yet), < 0 pb_select's rc, negated (the switch is dropped) */
+static int pb_due(uint32_t t)
+{
+    const track_t *tr = &trk[t];
+    uint32_t idx = tr->seq_idx, run = song.playing && tr->seq_pos < 0x7FFFFFFFu, last = pb_last[t];
+    int rc;
+    pb_last[t] = (uint8_t)idx;
+    if (!pb_next[t])
+        return 0;
+    if (run && idx + 1u < (uint32_t)tr->p[P_SLEN] && idx >= last)
+        return 0;
+    rc = pb_select(t, (uint32_t)pb_next[t] - 1u);
+    pb_next[t] = 0;
+    return rc ? -rc : 1;
 }
 
 /* the music was loaded (project.c project_restore_runtime): every track plays sequence 1 of an empty bank, the loaded

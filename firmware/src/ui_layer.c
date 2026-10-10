@@ -377,27 +377,15 @@ static void glo_tap(void)
 }
 
 #if FELUCCA_PATBANK
-/* track t plays sequence s (SEQ > SEQUENCE's knobs, SEQ held + C5..G5). Not while a song plays (it plays the projects' own).
- * The undo copy belongs to the old sequence, and so does the open SEQ layer's OCT- copy: both go to the new one */
-static void seq_switch_ui(uint32_t t, uint32_t s)
+/* track t's sequence was switched (patbank.c): the undo copy belongs to the old one, and so does the open SEQ layer's OCT-
+ * copy: both go to the new one. rc as pb_request / pb_due: a refusal says why */
+static void seq_after(uint32_t t, int rc)
 {
-    char n[2] = {(char)('1' + s % PB_N), 0}, a[8] = {'T', (char)('1' + t % NTRK), ' ', 'S', 'E', 'Q', ' ', 0};
-    int rc;
-    if (chain_busy()) {
-        ui_message("STOP TO EDIT");
+    char n[2] = {(char)('1' + pb_cur[t % NTRK]), 0}, a[8] = {'T', (char)('1' + t % NTRK), ' ', 'S', 'E', 'Q', ' ', 0};
+    if (rc < 0) {
+        ui_message(rc == -2 ? "AUTOMATION OVER 64" : rc == -3 ? "AUTOMATION FULL" : "SEQUENCE ERROR");
         return;
     }
-    if (s == pb_cur[t % NTRK]) {
-        ui_say(a, n);
-        return;
-    }
-    rc = pb_select(t, s);
-    if (rc == 2 || rc == 3) {
-        ui_message(rc == 2 ? "AUTOMATION OVER 64" : "AUTOMATION FULL");
-        return;
-    }
-    if (rc)
-        return;
     undo.trk = 0;
     if (ui.layer == LAYER_SEQ && t == song.sel) {
         memcpy(tl_open.step, TSEL->step, sizeof tl_open.step);
@@ -408,6 +396,42 @@ static void seq_switch_ui(uint32_t t, uint32_t s)
     ui_say(a, n);
     ui.force = 1;
 }
+/* a track's sequence chosen (SEQ > SEQUENCE's knobs, SEQ held + C5..G5). Not while a song plays (it plays the projects' own) */
+static void seq_switch_ui(uint32_t t, uint32_t s)
+{
+    int rc;
+    t %= NTRK;
+    if (chain_busy()) {
+        ui_message("STOP TO EDIT");
+        return;
+    }
+    rc = pb_request(t, s);
+    if (rc == 1) {                                       /* waits for the end of the one playing */
+        char w[10] = {'T', (char)('1' + t), ' ', 'N', 'E', 'X', 'T', ' ', (char)('1' + s % PB_N), 0};
+        ui_message(w);
+        ui.force = 1;
+    } else if (rc == 2) {
+        seq_after(t, 0);
+    } else
+        seq_after(t, rc);
+}
+/* main loop, every pass (main.c) */
+static void seq_poll(void)
+{
+    uint32_t t;
+    for (t = 0; t < NTRK; t++) {
+        int rc;
+        if (pb_next[t] && chain_busy()) {
+            pb_next[t] = 0;
+            continue;
+        }
+        rc = pb_due(t);
+        if (rc)
+            seq_after(t, rc > 0 ? 0 : rc);
+    }
+}
+#else
+static void seq_poll(void) {}
 #endif
 
 /* SEQ TOOLS: white key place p's action on the selected track (ui_tools.c), "STOP TO EDIT" while a song plays */
@@ -858,7 +882,8 @@ static uint32_t layer_leds(uint32_t *br)
             can = a->kind == LK_HOLD;
 #if FELUCCA_PATBANK
         } else if (l == LAYER_SEQ && k >= PB_KEY0) {    /* C5 .. G5: the sequence playing lit, the others breathe */
-            on = k - PB_KEY0 == pb_cur[song.sel % NTRK];
+            on = k - PB_KEY0 == pb_cur[song.sel % NTRK] ||
+                 (k - PB_KEY0 + 1u == pb_next[song.sel % NTRK] && (fm1_ms & 256u));   /* (a waiting switch blinks) */
             can = !chain_busy();
 #endif
         } else if (l == LAYER_SEQ) {                    /* the tools breathe (not while a song plays); DRUM: the lane */

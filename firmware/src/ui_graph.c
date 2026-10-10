@@ -1828,7 +1828,7 @@ static void draw_seqs(void)
         uint32_t sel = c == song.sel, mask = 0, sig;
         for (r = 0; r < PB_N; r++)
             mask |= (uint32_t)pb_filled(c, r) << r;
-        sig = (mask | (uint32_t)pb_cur[c] << 8 | sel << 12) * 2654435761u + 1u;
+        sig = (mask | (uint32_t)pb_cur[c] << 8 | sel << 12 | (uint32_t)pb_next[c] << 16) * 2654435761u + 1u;
         if (!ui.force && sig == sqs_sig[c])
             continue;
         sqs_sig[c] = sig;
@@ -1836,8 +1836,9 @@ static void draw_seqs(void)
         for (r = 0; r < PB_N; r++) {
             int32_t y = 4 + 14 * (int32_t)r;
             uint32_t on = r == pb_cur[c], full = (mask >> r) & 1u;
-            uint16_t fill = on ? T_ACCENT : full ? T_RAISE : T_SURF;
-            uint16_t ink = on ? T_INK : full ? (sel ? T_TEXT : T_MID) : T_DIM;
+            uint32_t nx = r + 1u == pb_next[c];             /* (waiting for the end of the one playing) */
+            uint16_t fill = on ? T_ACCENT : nx ? T_MID : full ? T_RAISE : T_SURF;
+            uint16_t ink = on || nx ? T_INK : full ? (sel ? T_TEXT : T_MID) : T_DIM;
             char b[2] = {(char)('1' + r), 0};
             cv_rrect(0, y, CARD_W, 12, 3, fill, T_BG);
             GFX_HOOK_ALIGN(0, y, CARD_W, y + 12, AL_HV, "sequence cell digit centred");

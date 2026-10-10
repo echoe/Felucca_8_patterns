@@ -425,7 +425,10 @@ locks (up to 64 records while it is not the one playing); DIV, SWING, GATE, QUAN
 - **SEQ > SEQUENCE** (the third SEQ page, after STEP and AUTOMATION): KNOB 1..4 pick the sequence, 1..8, of tracks 1..4.
 - **SEQ held + C5 .. G5** (the eight rightmost keys): the selected track plays that sequence; the one playing is lit.
   On a DRUM track the lane's RANDOM moved from C5 to F4 for this.
-- A switch is at once; the playhead keeps its step. Not while a song plays.
+- **MENU > CONTROL > SEQ SWITCH**: NOW (the default) switches at once, the playhead keeps its step; END, while the music
+  plays, waits for the last step of the sequence playing, so the new one starts from its first step (the waiting one shows
+  on the SEQUENCE page, its key blinks, and "T1 NEXT 3" says it; choosing the one playing calls it off). Stopped, a switch
+  is always at once. Not while a song plays.
 - SAVE keeps all of a project's sequences (the record holds the one playing, so an older firmware still opens it); RESTORE LAST
   keeps the music's. They live in the flash the user sample slots had, which these builds do not have.
 - A song plays each project's sequence as it was saved.

@@ -257,6 +257,40 @@ int main(void)
         bad += check("a flash failing in the middle of SAVE: SAVE ERROR, the project as it was", ok);
     }
 
+    {   /* MENU > CONTROL > SEQ SWITCH: NOW at once; END, while playing, at the end of the sequence playing */
+        reset();
+        ok = !(ui_prefs2 & (PREF_SEQ_END >> 16)) && menu_n(MI_SEQSW) == 2u && !strcmp(MI_NAME[MI_SEQSW], "SEQ SWITCH") &&
+             !strcmp(menu_vname(MI_SEQSW, 0), "NOW") && !strcmp(menu_vname(MI_SEQSW, 1), "END") && MI_TAB[MI_SEQSW] == MTAB_CONTROL;
+        song.playing = 1;
+        trk[0].p[P_SLEN] = 16; trk[0].seq_idx = 3;
+        (void)pb_request(0, 2);
+        ok &= pb_cur[0] == 2 && !pb_next[0];                       /* NOW (the default): at once, playing or not */
+        menu_put(MI_SEQSW, 1);
+        ok &= menu_get(MI_SEQSW) == 1 && (ui_prefs2 & (PREF_SEQ_END >> 16));
+        (void)pb_request(0, 5);
+        for (t = 0; t < NTRK; t++) (void)pb_due(t);
+        ok &= pb_cur[0] == 2 && pb_next[0] == 6;                   /* END, playing: waits (step 4 of 16) */
+        trk[0].seq_idx = 14; for (t = 0; t < NTRK; t++) (void)pb_due(t);
+        ok &= pb_cur[0] == 2;
+        trk[0].seq_idx = 15; for (t = 0; t < NTRK; t++) (void)pb_due(t);                           /* the last step: the next one is the new sequence's */
+        ok &= pb_cur[0] == 5 && !pb_next[0];
+        (void)pb_request(0, 1); (void)pb_request(0, 5);                  /* the one playing chosen again: the waiting one called off */
+        ok &= pb_cur[0] == 5 && !pb_next[0];
+        (void)pb_request(0, 4);
+        trk[0].seq_idx = 9; for (t = 0; t < NTRK; t++) (void)pb_due(t); trk[0].seq_idx = 2; for (t = 0; t < NTRK; t++) (void)pb_due(t);   /* a pass missed the last step: the wrap is seen */
+        ok &= pb_cur[0] == 4 && !pb_next[0];
+        (void)pb_request(0, 6);
+        song.playing = 0; for (t = 0; t < NTRK; t++) (void)pb_due(t);                              /* stopped: at once */
+        ok &= pb_cur[0] == 6 && !pb_next[0];
+        (void)pb_request(1, 3);                                       /* stopped: no waiting at all */
+        ok &= pb_cur[1] == 3 && !pb_next[1];
+        song.playing = 1;
+        (void)pb_request(2, 1); trk[2].p[P_SLEN] = 16; trk[2].seq_idx = 15;
+        project_save_as(0, "Q"); pb_reset_to_live();               /* (a project load / reset forgets a waiting switch) */
+        ok &= !pb_next[2];
+        bad += check("SEQ SWITCH: NOW at once; END waits for the last step (or a wrap seen), stopped switches at once, same slot cancels", ok);
+    }
+
     printf(bad ? "patbank test FAILED\n" : "patbank test passed\n");
     return bad != 0;
 }

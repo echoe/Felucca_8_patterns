@@ -1,0 +1,479 @@
+From ec54b36ea9b5e546e6593e308c9554387df437af Mon Sep 17 00:00:00 2001
+From: Felucca dev <dev@example.invalid>
+Date: Sat, 10 Oct 2026 06:30:14 +0000
+Subject: [PATCH] MENU > CONTROL > SEQ SWITCH: NOW or at the END of the
+ sequence playing
+
+A sequence chosen while the music plays can wait for the last step of the one
+playing (pb_request / pb_due in patbank.c, seq_poll in the main loop). The
+waiting one shows on SEQ > SEQUENCE and blinks on its key. Editor setting id 25
+(append-only); ui_prefs2 bit 4.
+---
+ README.md                  |  5 ++-
+ firmware/src/editor_menu.c |  1 +
+ firmware/src/main.c        |  1 +
+ firmware/src/menu_items.c  |  8 +++--
+ firmware/src/patbank.c     | 41 +++++++++++++++++++++++++
+ firmware/src/ui.c          |  5 ++-
+ firmware/src/ui_graph.c    |  7 +++--
+ firmware/src/ui_layer.c    | 63 ++++++++++++++++++++++++++------------
+ tests/editor_test.c        | 28 +++++++++--------
+ tests/patbank_test.c       | 34 ++++++++++++++++++++
+ tests/ui_test.c            |  4 +--
+ 11 files changed, 155 insertions(+), 42 deletions(-)
+
+diff --git a/README.md b/README.md
+index 630a834..51277e4 100644
+--- a/README.md
++++ b/README.md
+@@ -425,7 +425,10 @@ locks (up to 64 records while it is not the one playing); DIV, SWING, GATE, QUAN
+ - **SEQ > SEQUENCE** (the third SEQ page, after STEP and AUTOMATION): KNOB 1..4 pick the sequence, 1..8, of tracks 1..4.
+ - **SEQ held + C5 .. G5** (the eight rightmost keys): the selected track plays that sequence; the one playing is lit.
+   On a DRUM track the lane's RANDOM moved from C5 to F4 for this.
+-- A switch is at once; the playhead keeps its step. Not while a song plays.
++- **MENU > CONTROL > SEQ SWITCH**: NOW (the default) switches at once, the playhead keeps its step; END, while the music
++  plays, waits for the last step of the sequence playing, so the new one starts from its first step (the waiting one shows
++  on the SEQUENCE page, its key blinks, and "T1 NEXT 3" says it; choosing the one playing calls it off). Stopped, a switch
++  is always at once. Not while a song plays.
+ - SAVE keeps all of a project's sequences (the record holds the one playing, so an older firmware still opens it); RESTORE LAST
+   keeps the music's. They live in the flash the user sample slots had, which these builds do not have.
+ - A song plays each project's sequence as it was saved.
+diff --git a/firmware/src/editor_menu.c b/firmware/src/editor_menu.c
+index e71501e..db68d0d 100644
+--- a/firmware/src/editor_menu.c
++++ b/firmware/src/editor_menu.c
+@@ -30,6 +30,7 @@ static const uint8_t ED_MENU[][2] = {
+     {MI_TUNE, 22},                                     /* 1.2: the project's G_TUNE (was GLO > GLOBAL), AUDIO */
+     {MI_HOME, 23},                                     /* 1.3 (Discussions #112, #134): HOME SCOPE / TRACKS, DISPLAY */
+     {MI_HELP, 24},                                     /* 1.5 (Discussion #156): HELP OFF / ON, SYSTEM */
++    {MI_SEQSW, 25},                                    /* 1.6: SEQ SWITCH NOW / END, CONTROL (patbank.c) */
+ };
+ #define ED_MENU_N NELEM(ED_MENU)
+ 
+diff --git a/firmware/src/main.c b/firmware/src/main.c
+index 30a7588..fe39087 100644
+--- a/firmware/src/main.c
++++ b/firmware/src/main.c
+@@ -274,6 +274,7 @@ static void fm1_main(void)
+         felucca_dbg.stage = 1;
+         ui_input();
+         settings_poll();                              /* queued settings save: only while stopped */
++        seq_poll();                                   /* (1.6) the sequences waiting for the end of the one playing */
+         autosave_poll();                              /* (1.2) the music, stopped and idle: project.c */
+         felucca_dbg.stage = 2;
+         ui_leds();
+diff --git a/firmware/src/menu_items.c b/firmware/src/menu_items.c
+index 5d7f98d..6dd71fd 100644
+--- a/firmware/src/menu_items.c
++++ b/firmware/src/menu_items.c
+@@ -14,19 +14,19 @@
+  * GLO > SYSTEM), the values the project holds and saves as before (no format change; a project load brings its own);
+  * nothing of theirs is in the settings record (MI_PROJECT: menu_get / menu_put read and write song.g) */
+ enum { MI_COLOR, MI_STYLE, MI_LARGE, MI_ANIM, MI_LEDS, MI_SCROFF, MI_SCOPE, MI_HOME, MI_HOLD, MI_ACCEL, MI_LATCH, MI_BPMLOCK, MI_SCLLED,
+-       MI_PREVIEW, MI_CHADD, MI_LOWCUT, MI_USB,
++       MI_PREVIEW, MI_CHADD, MI_SEQSW, MI_LOWCUT, MI_USB,
+        MI_CLICK, MI_CLKLVL, MI_COUNTIN, MI_TUNE, MI_MIDIIN, MI_LCLEAR, MI_SERIAL, MI_RESTORE, MI_HELP, MI_PANEL, MI_INFO,
+        MI_ABOUT, MI_COUNT };
+                                                        /* (1.1: the metronome's rows in AUDIO; 1.2: RESTORE LAST in
+                                                         * SYSTEM, SCALE LEDS STEP PREVIEW CHORD ENTRY in CONTROL, SCOPE in
+                                                         * DISPLAY, TUNE in AUDIO, MIDI IN in MIDI, INFO in SYSTEM;
+-                                                        * 1.3: HOME in DISPLAY; 1.5: HELP in SYSTEM) */
++                                                        * 1.3: HOME in DISPLAY; 1.5: HELP in SYSTEM; 1.6: SEQ SWITCH in CONTROL) */
+ #define MI_VALUES MI_PANEL
+ static int menu_valued(uint32_t row) { return row < MI_VALUES && row != MI_LCLEAR; }   /* (a row with a value) */
+ #define MI_PROJECT(row) ((row) == MI_TUNE || (row) == MI_MIDIIN)   /* the project's values (song.g), not settings */
+ static const char *const MI_NAME[MI_COUNT] = {"COLOR", "STYLE", "LARGE", "ANIM", "LEDS", "SCREEN OFF", "SCOPE", "HOME", "HOLD", "KNOB ACCEL",
+                                               "FX LATCH", "BPM LOCK", "SCALE LEDS", "STEP PREVIEW", "CHORD ENTRY",
+-                                              "SPEAKER EQ", "USB LEVEL", "CLICK", "CLICK LEVEL", "COUNT-IN", "TUNE",
++                                              "SEQ SWITCH", "SPEAKER EQ", "USB LEVEL", "CLICK", "CLICK LEVEL", "COUNT-IN", "TUNE",
+                                               "MIDI IN", "LEARN CLEAR", "USB SERIAL", "RESTORE LAST", "HELP", "CALIBRATION", "INFO",
+                                               "ABOUT"};
+ /* 1.0.5: the MENU's tabs (ui_menu.c: ALGORITHM steps between them, PRESETS among one tab's rows; the editor gets a
+@@ -46,6 +46,7 @@ static const uint8_t MI_TAB[MI_COUNT] = {
+     MTAB_CONTROL, MTAB_CONTROL, MTAB_CONTROL, MTAB_CONTROL,                 /* HOLD KNOB ACCEL FX LATCH BPM LOCK */
+     MTAB_CONTROL,                                                           /* SCALE LEDS (1.2) */
+     MTAB_CONTROL, MTAB_CONTROL,                                             /* STEP PREVIEW, CHORD ENTRY (1.2) */
++    MTAB_CONTROL,                                                           /* SEQ SWITCH (1.6) */
+     MTAB_AUDIO, MTAB_AUDIO, MTAB_AUDIO, MTAB_AUDIO, MTAB_AUDIO,             /* SPEAKER EQ, USB LEVEL, CLICK, CLICK LEVEL,
+                                                                              * COUNT-IN */
+     MTAB_AUDIO,                                                             /* TUNE (1.2) */
+@@ -93,6 +94,7 @@ static const menu_flag_t MENU_FLAGS[] = {
+     {MI_SCOPE, PREF_SCOPE_MIX, {"OUT", "MIX"}},        /* 1.2, Discussion #165: MIX, the scope before MASTER (fx.c) */
+     {MI_PREVIEW, PREF_PREVIEW, {"OFF", "ON"}},         /* 1.2, Discussion #169: ON, the cursor's step sounds (ui_input.c) */
+     {MI_CHADD, PREF_CHORD_ADD, {"HOLD", "ADD"}},       /* 1.2, #155: ADD, keys add to the cursor step (ui_input.c) */
++    {MI_SEQSW, PREF_SEQ_END, {"NOW", "END"}},         /* 1.6: END, a sequence chosen while playing waits for the end of the one playing (patbank.c) */
+     {MI_HELP, PREF_HELP, {"OFF", "ON"}},               /* 1.5, Discussion #156: ON, a hint per page / layer (ui_help.c) */
+ };
+ /* SPEAKER EQ (settings.lowcut, fx.c fx_lowcut): an EQ on the master for the small speaker, not a speaker switch
+diff --git a/firmware/src/patbank.c b/firmware/src/patbank.c
+index acabdd3..4441c39 100644
+--- a/firmware/src/patbank.c
++++ b/firmware/src/patbank.c
+@@ -29,6 +29,8 @@ static uint8_t pb_cur[NTRK];             /* the sequence each track plays, 0..7
+ static uint8_t pb_len[PB_NSEQ];          /* LEN of each (the playing one's is the track's P_SLEN) */
+ static uint8_t pb_pat[PB_NSEQ][PB_PAT_B] __attribute__((section(".pool")));
+ static pb_mo_t pb_mo[PB_NSEQ] __attribute__((section(".pool")));   /* (the playing sequence's: motion) */
++static uint8_t pb_next[NTRK];            /* a switch waiting for the end of the sequence playing: the slot + 1, 0 none (SEQ SWITCH END) */
++static uint8_t pb_last[NTRK];            /* the step each track was on when pb_poll last looked */
+ static uint8_t pb_ready;
+ static uint8_t pb_dirty;                 /* bit o: the live store's object o is older than the mirror */
+ static uint32_t pb_gen;                  /* + 1 per change (autosave_sig) */
+@@ -97,6 +99,7 @@ static void pb_clear_all(void)
+         memcpy(pb_pat[q], pb_pat[0], PB_PAT_B);
+     memset(pb_mo, 0, sizeof pb_mo);
+     memset(pb_cur, 0, sizeof pb_cur);
++    memset(pb_next, 0, sizeof pb_next);
+     for (q = 0; q < PB_NSEQ; q++)
+         pb_len[q] = (uint8_t)TP[P_SLEN].def;
+     pb_ready = 1;
+@@ -188,11 +191,49 @@ static int pb_select(uint32_t t, uint32_t slot)
+     tr->rh_n = tr->rskip_n = 0;
+     motion_unguard(f);
+     pb_cur[t] = (uint8_t)slot;
++    pb_next[t] = 0;
+     pb_dirty |= (uint8_t)(1u << (q / PB_PER) | 1u << (old / PB_PER) | 1u << PB_META_O);
+     pb_gen++;
+     return 0;
+ }
+ 
++/* a sequence chosen for track t (SEQ > SEQUENCE's knobs, SEQ held + C5..G5). MENU > CONTROL > SEQ SWITCH: NOW at once; END,
++ * while the music plays, at the end of the sequence playing (pb_due). 0 switched, 1 waits, 2 it is the one playing (a
++ * waiting switch is called off), < 0 pb_select's rc, negated */
++static int pb_request(uint32_t t, uint32_t s)
++{
++    int rc;
++    t %= NTRK;
++    pb_need();
++    if (s == pb_cur[t]) {
++        pb_next[t] = 0;
++        return 2;
++    }
++    if ((ui_prefs2 & (PREF_SEQ_END >> 16)) && song.playing && s < PB_N) {
++        pb_next[t] = (uint8_t)(s + 1u);
++        return 1;
++    }
++    rc = pb_select(t, s);
++    return rc ? -rc : 0;
++}
++/* main loop, every pass, per track: its waiting switch happens on the last step of the sequence playing (the next step is
++ * the new one's first), at once when the music is stopped, and late (a wrap seen) when a pass missed the last step.
++ * 1 switched, 0 nothing (yet), < 0 pb_select's rc, negated (the switch is dropped) */
++static int pb_due(uint32_t t)
++{
++    const track_t *tr = &trk[t];
++    uint32_t idx = tr->seq_idx, run = song.playing && tr->seq_pos < 0x7FFFFFFFu, last = pb_last[t];
++    int rc;
++    pb_last[t] = (uint8_t)idx;
++    if (!pb_next[t])
++        return 0;
++    if (run && idx + 1u < (uint32_t)tr->p[P_SLEN] && idx >= last)
++        return 0;
++    rc = pb_select(t, (uint32_t)pb_next[t] - 1u);
++    pb_next[t] = 0;
++    return rc ? -rc : 1;
++}
++
+ /* the music was loaded (project.c project_restore_runtime): every track plays sequence 1 of an empty bank, the loaded
+  * steps and LEN in it. A store (patbank_store.c) fills the rest */
+ static void pb_reset_to_live(void)
+diff --git a/firmware/src/ui.c b/firmware/src/ui.c
+index 169176d..885f53b 100644
+--- a/firmware/src/ui.c
++++ b/firmware/src/ui.c
+@@ -24,6 +24,7 @@ static uint32_t up_pat_nth(uint32_t n);
+ static uint32_t up_pat_rank(uint32_t slot);
+ static void up_pat_load(track_t *t, uint32_t k);
+ static void seq_switch_ui(uint32_t t, uint32_t s);   /* ui_layer.c: track t plays sequence s (patbank.c) */
++static void seq_poll(void);                          /* ui_layer.c: the queued switches (SEQ SWITCH END), main loop */
+ static void up_auto_name(char *b, uint32_t e, uint32_t k);   /* naming (ui_name.c) */
+ static void up_ui_named(uint32_t op, uint32_t k, const char *name, uint32_t cat);
+ static uint32_t up_cat(uint32_t k);
+@@ -66,13 +67,15 @@ static uint32_t up_gen;                      /* bumped on every user bank change
+ /* 1.2: three more two-valued MENU settings, bits of another byte no engine uses, saved with the settings; 0 in older
+  * settings = today's behaviour (append-only, as ui_prefs): bit 0 DISPLAY > SCOPE MIX (Discussion #165, fx.c scope_mix),
+  * bit 1 CONTROL > STEP PREVIEW ON (Discussion #169, ui_input.c step_preview), bit 2 CONTROL > CHORD ENTRY ADD (#155,
+- * ui_input.c seq_entry). 1.5: bit 3 SYSTEM > HELP ON (Discussion #156, ui_help.c). Bits 4-7 free */
++ * ui_input.c seq_entry). 1.5: bit 3 SYSTEM > HELP ON (Discussion #156, ui_help.c). 1.6: bit 4 CONTROL > SEQ SWITCH END
++ * (patbank.c: a sequence chosen while playing starts at the end of the one playing; 0 = NOW). Bits 5-7 free */
+ #define ui_prefs2 (favorites.factory[15][24])
+ #define PREF_X 0xFF0000u                       /* (menu_items.c MENU_FLAGS: a bit of ui_prefs2, << 16) */
+ #define PREF_SCOPE_MIX (0x01u << 16)
+ #define PREF_PREVIEW (0x02u << 16)
+ #define PREF_CHORD_ADD (0x04u << 16)
+ #define PREF_HELP (0x08u << 16)
++#define PREF_SEQ_END (0x10u << 16)
+ /* 1.3 (Discussions #112, #134): MENU > DISPLAY > HOME, what the HOME page shows under its four cards: 0 SCOPE (the
+  * oscilloscope, as before), 1 TRACKS (the four tracks as rows: ui_graph.c draw_home_tracks), 2 LEVELS (1.5, #134: the
+  * rows of TRACKS, and KNOB 1..4 the LEVEL of T1..T4 in place of the engine's four: home_param). A byte of its own no
+diff --git a/firmware/src/ui_graph.c b/firmware/src/ui_graph.c
+index b3f0986..aa458cc 100644
+--- a/firmware/src/ui_graph.c
++++ b/firmware/src/ui_graph.c
+@@ -1828,7 +1828,7 @@ static void draw_seqs(void)
+         uint32_t sel = c == song.sel, mask = 0, sig;
+         for (r = 0; r < PB_N; r++)
+             mask |= (uint32_t)pb_filled(c, r) << r;
+-        sig = (mask | (uint32_t)pb_cur[c] << 8 | sel << 12) * 2654435761u + 1u;
++        sig = (mask | (uint32_t)pb_cur[c] << 8 | sel << 12 | (uint32_t)pb_next[c] << 16) * 2654435761u + 1u;
+         if (!ui.force && sig == sqs_sig[c])
+             continue;
+         sqs_sig[c] = sig;
+@@ -1836,8 +1836,9 @@ static void draw_seqs(void)
+         for (r = 0; r < PB_N; r++) {
+             int32_t y = 4 + 14 * (int32_t)r;
+             uint32_t on = r == pb_cur[c], full = (mask >> r) & 1u;
+-            uint16_t fill = on ? T_ACCENT : full ? T_RAISE : T_SURF;
+-            uint16_t ink = on ? T_INK : full ? (sel ? T_TEXT : T_MID) : T_DIM;
++            uint32_t nx = r + 1u == pb_next[c];             /* (waiting for the end of the one playing) */
++            uint16_t fill = on ? T_ACCENT : nx ? T_MID : full ? T_RAISE : T_SURF;
++            uint16_t ink = on || nx ? T_INK : full ? (sel ? T_TEXT : T_MID) : T_DIM;
+             char b[2] = {(char)('1' + r), 0};
+             cv_rrect(0, y, CARD_W, 12, 3, fill, T_BG);
+             GFX_HOOK_ALIGN(0, y, CARD_W, y + 12, AL_HV, "sequence cell digit centred");
+diff --git a/firmware/src/ui_layer.c b/firmware/src/ui_layer.c
+index 7cd0a5c..bcf7cd6 100644
+--- a/firmware/src/ui_layer.c
++++ b/firmware/src/ui_layer.c
+@@ -377,27 +377,15 @@ static void glo_tap(void)
+ }
+ 
+ #if FELUCCA_PATBANK
+-/* track t plays sequence s (SEQ > SEQUENCE's knobs, SEQ held + C5..G5). Not while a song plays (it plays the projects' own).
+- * The undo copy belongs to the old sequence, and so does the open SEQ layer's OCT- copy: both go to the new one */
+-static void seq_switch_ui(uint32_t t, uint32_t s)
++/* track t's sequence was switched (patbank.c): the undo copy belongs to the old one, and so does the open SEQ layer's OCT-
++ * copy: both go to the new one. rc as pb_request / pb_due: a refusal says why */
++static void seq_after(uint32_t t, int rc)
+ {
+-    char n[2] = {(char)('1' + s % PB_N), 0}, a[8] = {'T', (char)('1' + t % NTRK), ' ', 'S', 'E', 'Q', ' ', 0};
+-    int rc;
+-    if (chain_busy()) {
+-        ui_message("STOP TO EDIT");
+-        return;
+-    }
+-    if (s == pb_cur[t % NTRK]) {
+-        ui_say(a, n);
++    char n[2] = {(char)('1' + pb_cur[t % NTRK]), 0}, a[8] = {'T', (char)('1' + t % NTRK), ' ', 'S', 'E', 'Q', ' ', 0};
++    if (rc < 0) {
++        ui_message(rc == -2 ? "AUTOMATION OVER 64" : rc == -3 ? "AUTOMATION FULL" : "SEQUENCE ERROR");
+         return;
+     }
+-    rc = pb_select(t, s);
+-    if (rc == 2 || rc == 3) {
+-        ui_message(rc == 2 ? "AUTOMATION OVER 64" : "AUTOMATION FULL");
+-        return;
+-    }
+-    if (rc)
+-        return;
+     undo.trk = 0;
+     if (ui.layer == LAYER_SEQ && t == song.sel) {
+         memcpy(tl_open.step, TSEL->step, sizeof tl_open.step);
+@@ -408,6 +396,42 @@ static void seq_switch_ui(uint32_t t, uint32_t s)
+     ui_say(a, n);
+     ui.force = 1;
+ }
++/* a track's sequence chosen (SEQ > SEQUENCE's knobs, SEQ held + C5..G5). Not while a song plays (it plays the projects' own) */
++static void seq_switch_ui(uint32_t t, uint32_t s)
++{
++    int rc;
++    t %= NTRK;
++    if (chain_busy()) {
++        ui_message("STOP TO EDIT");
++        return;
++    }
++    rc = pb_request(t, s);
++    if (rc == 1) {                                       /* waits for the end of the one playing */
++        char w[10] = {'T', (char)('1' + t), ' ', 'N', 'E', 'X', 'T', ' ', (char)('1' + s % PB_N), 0};
++        ui_message(w);
++        ui.force = 1;
++    } else if (rc == 2) {
++        seq_after(t, 0);
++    } else
++        seq_after(t, rc);
++}
++/* main loop, every pass (main.c) */
++static void seq_poll(void)
++{
++    uint32_t t;
++    for (t = 0; t < NTRK; t++) {
++        int rc;
++        if (pb_next[t] && chain_busy()) {
++            pb_next[t] = 0;
++            continue;
++        }
++        rc = pb_due(t);
++        if (rc)
++            seq_after(t, rc > 0 ? 0 : rc);
++    }
++}
++#else
++static void seq_poll(void) {}
+ #endif
+ 
+ /* SEQ TOOLS: white key place p's action on the selected track (ui_tools.c), "STOP TO EDIT" while a song plays */
+@@ -858,7 +882,8 @@ static uint32_t layer_leds(uint32_t *br)
+             can = a->kind == LK_HOLD;
+ #if FELUCCA_PATBANK
+         } else if (l == LAYER_SEQ && k >= PB_KEY0) {    /* C5 .. G5: the sequence playing lit, the others breathe */
+-            on = k - PB_KEY0 == pb_cur[song.sel % NTRK];
++            on = k - PB_KEY0 == pb_cur[song.sel % NTRK] ||
++                 (k - PB_KEY0 + 1u == pb_next[song.sel % NTRK] && (fm1_ms & 256u));   /* (a waiting switch blinks) */
+             can = !chain_busy();
+ #endif
+         } else if (l == LAYER_SEQ) {                    /* the tools breathe (not while a song plays); DRUM: the lane */
+diff --git a/tests/editor_test.c b/tests/editor_test.c
+index 5afe3e0..9e3ace8 100644
+--- a/tests/editor_test.c
++++ b/tests/editor_test.c
+@@ -182,7 +182,7 @@ static int preferences(void)
+         host_wire[n - 33] == 0 &&                        /* (no bank since 1.0.3) */
+         host_wire[n - 32] == 0x53 && host_wire[n - 31] == 1 && host_wire[n - 30] == 3 &&
+         host_wire[n - 29] == 0x50 && host_wire[n - 28] == 1 && host_wire[n - 27] == 3 &&   /* FM6 v2: no bank, preset patches */
+-        host_wire[n - 26] == 0x4E && host_wire[n - 25] == 1 && host_wire[n - 24] == 25 &&   /* MENU settings: 25 items (1.5) */
++        host_wire[n - 26] == 0x4E && host_wire[n - 25] == 1 && host_wire[n - 24] == 26 &&   /* MENU settings: 26 items (1.6) */
+         host_wire[n - 23] == 0x52 && host_wire[n - 22] == 1 && host_wire[n - 21] == 4 &&   /* RATCH */
+         host_wire[n - 20] == 0x4C && host_wire[n - 19] == 1 && host_wire[n - 18] == 1 &&   /* 1.1 parameter locks */
+         host_wire[n - 17] == 0x41 && host_wire[n - 16] == 1 && host_wire[n - 15] == 0 && host_wire[n - 14] == 1 &&   /* 1.2: 128 */
+@@ -868,7 +868,7 @@ static uint32_t menu_set(uint32_t id, int32_t v)            /* -> rc; host_wire[
+ }
+ static int menu_protocol(void)
+ {
+-    static const char *const WANT[25][2] = {
++    static const char *const WANT[26][2] = {
+         {"COLOR", 0}, {"STYLE", "FLAT,LINE"}, {"LARGE", "OFF,ON"}, {"ANIM", "ON,OFF,IDLE"}, {"LEDS", "OFF,DIM LO,DIM HI,INV"},
+         {"HOLD", "0.3 s,0.4 s,0.5 s,0.6 s"}, {"KNOB ACCEL", "OFF,ON"}, {"FX LATCH", "OFF,ON"}, {"BPM LOCK", "OFF,ON"},
+         {"SPEAKER EQ", "FLAT,LOWCUT,BASS+"}, {"USB LEVEL", "MASTER,FIXED"}, {"USB SERIAL", "ON,OFF"},
+@@ -878,9 +878,10 @@ static int menu_protocol(void)
+         {"SCOPE", "OUT,MIX"}, {"STEP PREVIEW", "OFF,ON"}, {"CHORD ENTRY", "HOLD,ADD"},                  /* (1.2) */
+         {"MIDI IN", "CH1-4,SEL,CH5-8,CH9-12,CH13-16"}, {"TUNE", 0},   /* (1.2: the project's ROUT and TUNE; TUNE a number) */
+         {"HOME", "SCOPE,TRACKS,LEVELS"},                                                       /* (1.3; 1.5: LEVELS) */
+-        {"HELP", "OFF,ON"}};                                                                         /* (1.5) */
+-    static const int32_t DEF[25] = {-1, 0, 0, 0, 2, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};   /* (COLOR: the default palette) */
+-    static const uint8_t TAB[25] = {0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 4, 2, 2, 2, 4, 1, 0, 0, 1, 1, 3, 2, 0, 4};   /* DISPLAY CONTROL AUDIO
++        {"HELP", "OFF,ON"},                                                                          /* (1.5) */
++        {"SEQ SWITCH", "NOW,END"}};                                                                  /* (1.6) */
++    static const int32_t DEF[26] = {-1, 0, 0, 0, 2, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};   /* (COLOR: the default palette) */
++    static const uint8_t TAB[26] = {0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 4, 2, 2, 2, 4, 1, 0, 0, 1, 1, 3, 2, 0, 4, 1};   /* DISPLAY CONTROL AUDIO
+                                                                                                          * MIDI SYSTEM (1.2) */
+     static const char *const TABN[5] = {"DISPLAY", "CONTROL", "AUDIO", "MIDI", "SYSTEM"};
+     int bad = 0, ok = 1;
+@@ -891,7 +892,7 @@ static int menu_protocol(void)
+     FILE *jf = json ? fopen(json, "w") : 0;
+     reset();
+     if (jf) fprintf(jf, "[");
+-    for (i = 0; i < 25u; i++) {
++    for (i = 0; i < 26u; i++) {
+         n = menu_desc(i, &it);
+         joined[0] = 0;
+         for (k = 0; k < it.nnames; k++) { if (k) strcat(joined, ","); strcat(joined, it.names[k]); }
+@@ -913,7 +914,7 @@ static int menu_protocol(void)
+         }
+     }
+     if (jf) { fprintf(jf, "]\n"); fclose(jf); }
+-    bad += check("MENU_DESC: 25 items (1.0.4's 12 in the menu's order, then 1.1's CLICK, CLICK LEVEL, COUNT-IN, 1.2's RESTORE LAST, SCALE LEDS, SCREEN OFF, 1.2's SCOPE, STEP PREVIEW, CHORD ENTRY, MIDI IN, TUNE, 1.3's HOME, 1.5's HELP), ids 0..24, names, defaults; TUNE a number -50..50 ct", ok);
++    bad += check("MENU_DESC: 26 items (1.0.4's 12 in the menu's order, then 1.1's CLICK, CLICK LEVEL, COUNT-IN, 1.2's RESTORE LAST, SCALE LEDS, SCREEN OFF, 1.2's SCOPE, STEP PREVIEW, CHORD ENTRY, MIDI IN, TUNE, 1.3's HOME, 1.5's HELP, 1.6's SEQ SWITCH), ids 0..25, names, defaults; TUNE a number -50..50 ct", ok);
+     bad += check("MENU_DESC (1.0.5): after the names (TUNE: the unit) each item's tab, index and name (DISPLAY CONTROL AUDIO MIDI SYSTEM)", ok);
+     {   /* an older editor reads the names and stops: the tab is past them, nothing it reads moved */
+         uint32_t m = menu_desc(4, &it), p = 14, q;
+@@ -923,12 +924,12 @@ static int menu_protocol(void)
+         bad += check("MENU_DESC: the tab comes after every byte of the 1.0.4 reply (older editors ignore it)", ok);
+     }
+     ok = 1;
+-    for (i = 0; i < 25u; i++) {
++    for (i = 0; i < 26u; i++) {
+         menu_desc(i, &it);
+         ok &= strcmp(it.name, "CALIBRATION") && strcmp(it.name, "ABOUT") && strcmp(it.name, "INFO");
+     }
+-    n = menu_desc(25, &it);
+-    ok &= n == 2u && it.index == 25 && it.id == 127;
++    n = menu_desc(26, &it);
++    ok &= n == 2u && it.index == 26 && it.id == 127;
+     n = menu_desc(127, &it);
+     bad += check("MENU_DESC: no CALIBRATION / INFO / ABOUT; an index past the list answers index, 127 (no item)",
+                  ok && n == 2u && it.index == 127 && it.id == 127);
+@@ -967,8 +968,9 @@ static int menu_protocol(void)
+                                                          * project's, rc 0: in the music, no settings record) */
+     ok &= menu_set(23, 1) == 3 && ui_home_view == HV_TRACKS && ui_prefs2 == 7u && ui_scr == 1u;   /* (1.3: its own byte) */
+     ok &= menu_set(24, 1) == 3 && ui_prefs2 == 15u && help_on();                                  /* (1.5: HELP, bit 3) */
+-    for (i = 0; i < 25u; i++) {                         /* MENU_DESC reads them back */
+-        static const int32_t SET[25] = {2, 1, 1, 1, 1, 3, 1, 1, 1, 2, 1, 0, 2, 0, 2, 1, 1, 2, 1, 1, 1, 2, -13, 1, 1};
++    ok &= menu_set(25, 1) == 3 && ui_prefs2 == 31u;                                               /* (1.6: SEQ SWITCH END, bit 4) */
++    for (i = 0; i < 26u; i++) {                         /* MENU_DESC reads them back */
++        static const int32_t SET[26] = {2, 1, 1, 1, 1, 3, 1, 1, 1, 2, 1, 0, 2, 0, 2, 1, 1, 2, 1, 1, 1, 2, -13, 1, 1, 1};
+         menu_desc(i, &it);
+         ok &= it.value == SET[i];
+     }
+@@ -995,7 +997,7 @@ static int menu_protocol(void)
+         static uint8_t fav0[sizeof favorites], set0[sizeof settings];
+         uint8_t hold0 = settings_hold, leds0 = settings_leds;
+         memcpy(fav0, &favorites, sizeof favorites); memcpy(set0, &settings, sizeof settings);
+-        ok = menu_set(25, 1) == 1 && host_wire[6] == 25 && ed_rv(host_wire + 7) == 1;
++        ok = menu_set(26, 1) == 1 && host_wire[6] == 26 && ed_rv(host_wire + 7) == 1;
+         ok &= menu_set(126, -3) == 1 && host_wire[6] == 126 && ed_rv(host_wire + 7) == -3;
+         ok &= menu_set(127, 0) == 1 && host_wire[6] == 127;
+         ok &= !memcmp(fav0, &favorites, sizeof favorites) && !memcmp(set0, &settings, sizeof settings) &&
+diff --git a/tests/patbank_test.c b/tests/patbank_test.c
+index 4f71b5c..2f950c2 100644
+--- a/tests/patbank_test.c
++++ b/tests/patbank_test.c
+@@ -257,6 +257,40 @@ int main(void)
+         bad += check("a flash failing in the middle of SAVE: SAVE ERROR, the project as it was", ok);
+     }
+ 
++    {   /* MENU > CONTROL > SEQ SWITCH: NOW at once; END, while playing, at the end of the sequence playing */
++        reset();
++        ok = !(ui_prefs2 & (PREF_SEQ_END >> 16)) && menu_n(MI_SEQSW) == 2u && !strcmp(MI_NAME[MI_SEQSW], "SEQ SWITCH") &&
++             !strcmp(menu_vname(MI_SEQSW, 0), "NOW") && !strcmp(menu_vname(MI_SEQSW, 1), "END") && MI_TAB[MI_SEQSW] == MTAB_CONTROL;
++        song.playing = 1;
++        trk[0].p[P_SLEN] = 16; trk[0].seq_idx = 3;
++        (void)pb_request(0, 2);
++        ok &= pb_cur[0] == 2 && !pb_next[0];                       /* NOW (the default): at once, playing or not */
++        menu_put(MI_SEQSW, 1);
++        ok &= menu_get(MI_SEQSW) == 1 && (ui_prefs2 & (PREF_SEQ_END >> 16));
++        (void)pb_request(0, 5);
++        for (t = 0; t < NTRK; t++) (void)pb_due(t);
++        ok &= pb_cur[0] == 2 && pb_next[0] == 6;                   /* END, playing: waits (step 4 of 16) */
++        trk[0].seq_idx = 14; for (t = 0; t < NTRK; t++) (void)pb_due(t);
++        ok &= pb_cur[0] == 2;
++        trk[0].seq_idx = 15; for (t = 0; t < NTRK; t++) (void)pb_due(t);                           /* the last step: the next one is the new sequence's */
++        ok &= pb_cur[0] == 5 && !pb_next[0];
++        (void)pb_request(0, 1); (void)pb_request(0, 5);                  /* the one playing chosen again: the waiting one called off */
++        ok &= pb_cur[0] == 5 && !pb_next[0];
++        (void)pb_request(0, 4);
++        trk[0].seq_idx = 9; for (t = 0; t < NTRK; t++) (void)pb_due(t); trk[0].seq_idx = 2; for (t = 0; t < NTRK; t++) (void)pb_due(t);   /* a pass missed the last step: the wrap is seen */
++        ok &= pb_cur[0] == 4 && !pb_next[0];
++        (void)pb_request(0, 6);
++        song.playing = 0; for (t = 0; t < NTRK; t++) (void)pb_due(t);                              /* stopped: at once */
++        ok &= pb_cur[0] == 6 && !pb_next[0];
++        (void)pb_request(1, 3);                                       /* stopped: no waiting at all */
++        ok &= pb_cur[1] == 3 && !pb_next[1];
++        song.playing = 1;
++        (void)pb_request(2, 1); trk[2].p[P_SLEN] = 16; trk[2].seq_idx = 15;
++        project_save_as(0, "Q"); pb_reset_to_live();               /* (a project load / reset forgets a waiting switch) */
++        ok &= !pb_next[2];
++        bad += check("SEQ SWITCH: NOW at once; END waits for the last step (or a wrap seen), stopped switches at once, same slot cancels", ok);
++    }
++
+     printf(bad ? "patbank test FAILED\n" : "patbank test passed\n");
+     return bad != 0;
+ }
+diff --git a/tests/ui_test.c b/tests/ui_test.c
+index f4587de..af0c565 100644
+--- a/tests/ui_test.c
++++ b/tests/ui_test.c
+@@ -1603,10 +1603,10 @@ static int test_menu_tabs(void)
+             }
+     }
+     ui_prefs = 0;
+-    bad += check("MENU tabs: DISPLAY CONTROL AUDIO MIDI SYSTEM (8 7 6 2 5 rows), 1..8 each in a run, fit the page; tab gaps "
++    bad += check("MENU tabs: DISPLAY CONTROL AUDIO MIDI SYSTEM (8 8 6 2 5 rows), 1..8 each in a run, fit the page; tab gaps "
+                  "constant (S, LARGE)",
+                  ok && MTAB_COUNT == 5u && str_eq(MTAB_NAME[0], "DISPLAY") && str_eq(MTAB_NAME[MTAB_MIDI], "MIDI") &&
+-                 mtab_rows(MTAB_DISPLAY) == 8u && MI_TAB[MI_HOME] == MTAB_DISPLAY && mtab_rows(MTAB_CONTROL) == 7u && mtab_rows(MTAB_AUDIO) == 6u &&
++                 mtab_rows(MTAB_DISPLAY) == 8u && MI_TAB[MI_HOME] == MTAB_DISPLAY && mtab_rows(MTAB_CONTROL) == 8u && mtab_rows(MTAB_AUDIO) == 6u &&
+                  mtab_rows(MTAB_MIDI) == 2u && MI_TAB[MI_LCLEAR] == MTAB_MIDI && mtab_rows(MTAB_SYSTEM) == 6u && MI_TAB[MI_TUNE] == MTAB_AUDIO &&   /* (1.5: LEARN CLEAR, HELP) */
+                  MI_TAB[MI_MIDIIN] == MTAB_MIDI && MI_TAB[MI_INFO] == MTAB_SYSTEM && MI_INFO >= MI_VALUES);
+ 
+-- 
+2.43.0
+
