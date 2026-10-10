@@ -376,6 +376,40 @@ static void glo_tap(void)
     }
 }
 
+#if FELUCCA_PATBANK
+/* track t plays sequence s (SEQ > SEQUENCE's knobs, SEQ held + C5..G5). Not while a song plays (it plays the projects' own).
+ * The undo copy belongs to the old sequence, and so does the open SEQ layer's OCT- copy: both go to the new one */
+static void seq_switch_ui(uint32_t t, uint32_t s)
+{
+    char n[2] = {(char)('1' + s % PB_N), 0}, a[8] = {'T', (char)('1' + t % NTRK), ' ', 'S', 'E', 'Q', ' ', 0};
+    int rc;
+    if (chain_busy()) {
+        ui_message("STOP TO EDIT");
+        return;
+    }
+    if (s == pb_cur[t % NTRK]) {
+        ui_say(a, n);
+        return;
+    }
+    rc = pb_select(t, s);
+    if (rc == 2 || rc == 3) {
+        ui_message(rc == 2 ? "AUTOMATION OVER 64" : "AUTOMATION FULL");
+        return;
+    }
+    if (rc)
+        return;
+    undo.trk = 0;
+    if (ui.layer == LAYER_SEQ && t == song.sel) {
+        memcpy(tl_open.step, TSEL->step, sizeof tl_open.step);
+        motion_snapshot_track(TSEL, &tl_open.mo);
+        lys.v[0] = TSEL->p[P_SLEN];
+        lys.loaded = 0;
+    }
+    ui_say(a, n);
+    ui.force = 1;
+}
+#endif
+
 /* SEQ TOOLS: white key place p's action on the selected track (ui_tools.c), "STOP TO EDIT" while a song plays */
 static void tools_key(uint32_t p)
 {
@@ -642,6 +676,12 @@ static void layer_key(uint32_t l, uint32_t k)
         if (!key_black(k) && p < 4u)
             rec_key(p);
     } else if (l == LAYER_SEQ) {
+#if FELUCCA_PATBANK
+        if (k >= PB_KEY0 && k < PB_KEY0 + PB_N) {       /* C5 .. G5: the sequence the selected track plays */
+            seq_switch_ui(song.sel, k - PB_KEY0);
+            return;
+        }
+#endif
         if (!key_black(k))
             tools_key(p);
         else if (p < NLANE && drum_track(TSEL))
@@ -816,6 +856,11 @@ static uint32_t layer_leds(uint32_t *br)
         } else if (l == LAYER_EDIT && (a = eqa_of(TSEL, p)) != 0) {   /* the quick actions: on lit (DRUM: sounding), */
             on = a->on(TSEL, a->arg) != 0u;             /* a HOLD one off breathes, none dark */
             can = a->kind == LK_HOLD;
+#if FELUCCA_PATBANK
+        } else if (l == LAYER_SEQ && k >= PB_KEY0) {    /* C5 .. G5: the sequence playing lit, the others breathe */
+            on = k - PB_KEY0 == pb_cur[song.sel % NTRK];
+            can = !chain_busy();
+#endif
         } else if (l == LAYER_SEQ) {                    /* the tools breathe (not while a song plays); DRUM: the lane */
             on = b && p < NLANE && drum_track(TSEL) && p == ui.lane;   /* lit, the other lanes breathe */
             can = b ? p < NLANE && drum_track(TSEL) : tl_cell(TSEL, p) && !chain_busy();
@@ -1025,9 +1070,9 @@ static void layer_edit(void)                            /* the engines from F3, 
  * track the lanes of black keys 1..8 under them (the selected one: the selection's fill). A melodic track: the two
  * rows of the sequence's tools only */
 static const uint8_t TL_ICON[TL_N] = {ICON_CLEAR, ICON_X_REVERSE, ICON_X_LEFT, ICON_X_RIGHT, ICON_PROB, ICON_W_SH,
-    ICON_DRUM, 0, ICON_CLEAR, ICON_X_REVERSE, ICON_STEPS, ICON_PROB};
-static const char *const TL_NAME[TL_N] = {"CLEAR", "REVERSE", "SHIFT", "SHIFT", "RANDOM", "COOK", "BEAT", 0,
-    "CLR", "REV", "FILL", "RND"};
+    ICON_DRUM, ICON_PROB, ICON_CLEAR, ICON_X_REVERSE, ICON_STEPS, 0};
+static const char *const TL_NAME[TL_N] = {"CLEAR", "REVERSE", "SHIFT", "SHIFT", "RANDOM", "COOK", "BEAT", "RND",
+    "CLR", "REV", "FILL", 0};
 static void layer_seq(void)
 {
     uint32_t p, st = chain_busy() ? LS_DIM : LS_OFF, drum = (uint32_t)drum_track(TSEL);
@@ -1037,7 +1082,7 @@ static void layer_seq(void)
             continue;
         n[0] = W_NOTE[p];
         str_cpy(nm, TL_NAME[p], sizeof nm);
-        if (p >= TL_LCLR) {                             /* the lane's: "CLR BD" */
+        if (p >= TL_LRND) {                             /* the lane's: "CLR BD" */
             str_cpy(nm + str_len(nm), " ", 2);
             str_cpy(nm + str_len(nm), drum_lane_abbr(TSEL, ui.lane), sizeof nm - str_len(nm));
         }

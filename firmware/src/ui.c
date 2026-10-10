@@ -23,6 +23,7 @@ static uint32_t up_pat_count(void);
 static uint32_t up_pat_nth(uint32_t n);
 static uint32_t up_pat_rank(uint32_t slot);
 static void up_pat_load(track_t *t, uint32_t k);
+static void seq_switch_ui(uint32_t t, uint32_t s);   /* ui_layer.c: track t plays sequence s (patbank.c) */
 static void up_auto_name(char *b, uint32_t e, uint32_t k);   /* naming (ui_name.c) */
 static void up_ui_named(uint32_t op, uint32_t k, const char *name, uint32_t cat);
 static uint32_t up_cat(uint32_t k);
@@ -353,7 +354,7 @@ static uint32_t large_kind(void)
         return home_tracks() ? LK_LABEL : LK_TALL;      /* a list page; the rows' names in M: draw_home_tracks) */
     g = cur_page()->graph;
     return g == GR_BROWSE || g == GR_SLOTS || g == GR_USER || g == GR_PATS || g == GR_SONG || g == GR_ROLL ||
-           g == GR_SLICES || g == GR_EVENTS ? LK_LABEL : LK_TALL;
+           g == GR_SLICES || g == GR_EVENTS || g == GR_SEQS ? LK_LABEL : LK_TALL;
 }
 /* the geometry of the page shown: the cards' height, the panel's top and height */
 static uint32_t card_h(void) { return large_kind() == LK_TALL ? LG_CARD_H : CARD_H; }
@@ -1497,6 +1498,7 @@ static void track_select(uint32_t i)
 #include "ui_slice.c"                             /* EDIT > SLICES: SLICE's slices by hand (an action page too) */
 #include "ui_events.c"                            /* SEQ > AUTOMATION: locks, events, CHANCE, RATCH as a list (an action page) */
 #include "midi_learn.c"                           /* MIDI LEARN (1.5): GLO + D4, a knob, a CC */
+#include "patbank.c"                              /* eight sequences per track (1.6): SEQ > SEQUENCE, SEQ held + C5..G5 */
 
 /* ---------------------------------------------------- action pages --- */
 /* Pages whose purpose is an action (SAVE > USER, PHRASES, PROJECT, TOOLS, EDIT > SLICES, SEQ > AUTOMATION): the knobs pick,

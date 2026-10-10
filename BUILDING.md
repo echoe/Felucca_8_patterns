@@ -61,6 +61,7 @@ Build options (environment, `0` or `1`; defaults in `firmware/src/felucca.c`, `c
 | `FELUCCA_UAC_48K` | 1 | `0`: the USB audio input at 44.1 kHz only, as up to 1.0.5.2 (`firmware/src/usb.c`) |
 | `FELUCCA_UART` | 1 | TRS MIDI IN |
 | `FELUCCA_SLICE` | 1 | the SLICE engine |
+| `FELUCCA_PATBANK` | 1 | eight sequences per track (SEQ > SEQUENCE); their flash is where the three user sample slots were, so `0` builds with USR1..3 and no sequence banks |
 | `FELUCCA_ICONS` | 1 | parameter icons on the knob cards |
 | `FELUCCA_FM4` | 0 | the retired DIGITAL engine (4-operator FM) instead of its FM6 conversion |
 

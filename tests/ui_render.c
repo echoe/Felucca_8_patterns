@@ -761,7 +761,7 @@ enum { S_HOME, S_HOME_IDLE, S_MESSAGE, S_MESSAGE_KEY, S_MESSAGE_NOFILE, S_PRESET
        S_MENU_TUNE, S_MENU_INFO, S_HOME_TRACKS, S_HOME_TRACKS_STOPPED, S_HOME_TRACKS_HOT, S_MENU_HOME, S_HOME_LEVELS, S_HELP_HOME, S_HELP_USER, S_HELP_GRID, S_HELP_LFO, S_HELP_GLO, S_HELP_SEQ, S_MENU_HELP,
        S_INSERT_CRUSH, S_INSERT_FOLD, S_INSERT_PHASER, S_INSERT_OFF, S_INSERT_MIX,
        S_ENV_SYNC, S_ENV_DEST_SYNC, S_FILTER,
-       S_LEARN_WAIT, S_LEARN_PICK, S_LEARN_SET, S_LEARN_LONG, S_GLO_LEARN, S_MENU_LCLEAR, S_MENU_LCLEAR_NONE, S_COUNT };
+       S_LEARN_WAIT, S_LEARN_PICK, S_LEARN_SET, S_LEARN_LONG, S_GLO_LEARN, S_MENU_LCLEAR, S_MENU_LCLEAR_NONE, S_SEQUENCE, S_SEQUENCE_FULL, S_COUNT };
 static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "message_key", "message_nofile", "presets", "presets_nofav", "user",
     "phrases", "project", "tools", "song_empty", "song", "step", "auto_steps", "auto_add_chance", "automation", "drum",
     "drum_hand", "drum_cym", "mixer", "mixer_from_home", "mixer_pan", "env", "env_dest", "lfo", "mod", "fx", "slicer", "dly", "scl", "chord", "chord_wide", "chord_off", "chord_kit", "arp",
@@ -786,7 +786,7 @@ static const char *const S_NAME[S_COUNT] = {"home", "home_idle", "message", "mes
     "menu_tune", "menu_info", "home_tracks", "home_tracks_stopped", "home_tracks_hot", "menu_home", "home_levels", "help_home", "help_user", "help_grid", "help_lfo", "layer_glo_help", "layer_seq_help", "menu_help",
     "insert_crush", "insert_fold", "insert_phaser", "insert_off", "insert_mix",
     "env_sync", "env_dest_sync", "filter",
-    "learn_wait", "learn_pick", "learn_set", "learn_long", "layer_glo_learn", "menu_learn_clear", "menu_learn_clear_none"};
+    "learn_wait", "learn_pick", "learn_set", "learn_long", "layer_glo_learn", "menu_learn_clear", "menu_learn_clear_none", "sequence", "sequence_full"};
 
 /* the STEP page's piano roll (ui_graph.c graph_roll) on track 1, stopped unless said: an empty pattern; ACID in
  * A minor; POLY chords (Am7 F C G, tied); a line with ties, slides and accents in C major; LEN 32 on its second
@@ -1133,6 +1133,21 @@ static void setup(int s)
         break;
     }
     case S_MENU_LCLEAR_NONE: ui.menu = 1; ui.menu_sel = MI_LCLEAR; break;
+    case S_SEQUENCE:                                   /* 1.6 SEQ > SEQUENCE: T1 plays 3 (of 1, 3, 4 with notes), T3 plays 2, T4 8 */
+    case S_SEQUENCE_FULL: {
+        uint32_t t, q;
+        for (t = 0; t < NTRK; t++)
+            for (q = 0; q < PB_N; q++) {
+                if (!(s == S_SEQUENCE_FULL || (t == 0u && (q == 0u || q == 2u || q == 3u)) || (t == 2u && q == 1u)))
+                    continue;
+                (void)pb_select(t, q);
+                trk[t].step[q].n = 1; trk[t].step[q].note[0] = 60; trk[t].step[q].time = ST_NOTE; trk[t].step[q].vel = 96;
+            }
+        (void)pb_select(0, 2); (void)pb_select(2, 1); (void)pb_select(3, 7);
+        song.sel = s == S_SEQUENCE_FULL ? 3 : 0;
+        go_page(GR_SEQS); ui.hot_col = 2; ui.hot_t = 30;
+        break;
+    }
     case S_MENU_INFO:
         ui.menu = 3; ui.menu_sel = MI_INFO; song.cpu_q8 = 87u;   /* (34 %; USB: the host has none, OFF) */
         info.t = fm1_ms - INFO_CPU_MS;
