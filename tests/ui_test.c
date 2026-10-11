@@ -9088,6 +9088,32 @@ static int test_seq_end_knob(void)
     ok &= CH_SEQ(chain_config.row[0].slot[0]) == 0u;
     chain_defaults(&chain_config);
     bad += check("1.6 SONG: PRESETS turns the cell's sequence (0 = as saved .. 8), KNOB 3 resets it, a silent cell has none", ok);
+    /* the footer says what PRESETS does on both pages (preset_hint: ui_draw.c) */
+    {
+        char h[16]; uint32_t on;
+        ui_power_on();
+        go_title("SEQUENCE"); frame();
+        song.sel = 1; pb_need(); pb_chain[1] = 0; pb_start[1] = 0;
+        ok = preset_hint(h, &on) == 1 && str_eq(h, "CHAIN OFF");
+        (void)pb_set_chain(1, 3);
+        ok &= preset_hint(h, &on) == 1 && str_eq(h, "CHAIN 3");
+        chain_defaults(&chain_config);
+        chain_config.count = 2; chain_config.row[0].slot[0] = CH_MAKE(1u, 3u); chain_config.row[1].slot[0] = CH_MAKE(CHAIN_SILENT, 0u);
+        go_title("SONG"); frame();
+        ui.song_row = 0; ui.song_trk = 0;
+        ok &= preset_hint(h, &on) == 2 && str_eq(h, "SEQ 3") && on;
+        chain_config.row[0].slot[0] = CH_MAKE(1u, 0u);
+        ok &= preset_hint(h, &on) == 2 && str_eq(h, "SAVED") && on;
+        ui.song_row = 1;
+        ok &= preset_hint(h, &on) == 2 && str_eq(h, "SEQ") && !on;       /* a silent cell: nothing to turn */
+        ui.song_row = 2;
+        ok &= preset_hint(h, &on) == 2 && !on;                           /* the ADD row too */
+        go_home(); frame();
+        ok &= preset_hint(h, &on) == 0;
+        pb_chain[1] = 0;
+        chain_defaults(&chain_config);
+        bad += check("1.6 the footer says what PRESETS does: the chain in the sound's place on SEQUENCE, the cell's sequence on SONG", ok);
+    }
     return bad;
 }
 

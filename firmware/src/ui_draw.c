@@ -723,9 +723,50 @@ static void sound_name(const track_t *t, char *b)
         str_cpy(b, e->presets[t->preset % e->npresets].name, 16);
 }
 
+#if FELUCCA_PATBANK
+/* What the PRESETS knob does on SEQ > SEQUENCE (the selected track's chain: "CHAIN 4", shown where the sound's name is: PRESETS
+ * is not the sound there) and on SONG (the selected cell's
+ * sequence: "SEQ 3", "SAVED": the one the project was saved on), for the footer's first row. 0: not such a page. *on: it would
+ * act now (a SONG cell that plays a project) */
+static int preset_hint(char *b, uint32_t *on)
+{
+    const page_t *pg = cur_page();
+    *on = 1u;
+    if (ui.home)
+        return 0;
+    if (pg->graph == GR_SEQS) {
+        str_cpy(b, "CHAIN ", 12);
+        if (pb_run(song.sel) > 1u) {
+            b[6] = (char)('0' + pb_run(song.sel));
+            b[7] = 0;
+        } else
+            str_cpy(b + 6, "OFF", 4);
+        return 1;
+    }
+    if (pg->graph == GR_SONG) {
+        uint32_t used = ui.song_row < chain_config.count && ui.song_row < CHAIN_ROWS, v = 0xFFu;
+        if (used)
+            v = chain_config.row[ui.song_row].slot[ui.song_trk % NTRK];
+        *on = used && CH_SLOT(v) < 4u;
+        if (!*on)
+            str_cpy(b, "SEQ", 4);
+        else if (CH_SEQ(v)) {
+            str_cpy(b, "SEQ ", 5);
+            b[4] = (char)('0' + CH_SEQ(v));
+            b[5] = 0;
+        } else
+            str_cpy(b, "SAVED", 6);
+        return 2;
+    }
+    return 0;
+}
+#endif
+
 static void draw_foot(void)
 {
-    char s[48], pn[16], ti[20], ln[24];
+    char s[48], pn[16], ti[20], ln[24], ph_[16] = "";
+    uint32_t ph_on = 0;
+    int ph_kind = 0;
     const track_t *t = TSEL;
     uint32_t sig;
     const page_t *pg = cur_page();
@@ -733,6 +774,11 @@ static void draw_foot(void)
     const char *ename = e->name, *help;
     int32_t x;
     sound_name(t, pn);
+#if FELUCCA_PATBANK
+    ph_kind = preset_hint(ph_, &ph_on);                  /* 1.6: the PRESETS knob's work */
+    if (ph_kind == 1)
+        str_cpy(pn, ph_, sizeof pn);                     /* SEQUENCE: the chain in the sound's place (the steps stay in row 1) */
+#endif
     if (ui.home)
         str_cpy(ti, "HOME", sizeof ti);
     else                                               /* page title + number in its family: "ENV DEST 2/2" */
@@ -753,6 +799,10 @@ static void draw_foot(void)
         foot_hint(ha, hb);
         sig += str_hash(str_hash(act_ready() ? 7u : 3u, ha), hb) + foot_rename() * 7717u;
     }
+#if FELUCCA_PATBANK
+    if (ph_kind == 2)
+        sig += str_hash(0x7E5E7u + ph_on, ph_);          /* (SONG: its hint in row 1; SEQUENCE's is in pn, in s) */
+#endif
     if (grid_on())
         sig += 0x51EDu + (uint32_t)black_held(GK_ACC) * 977u;
     help = ui.help_t && !ui.ml.on ? help_page() : 0;   /* 1.5, HELP ON: the page's hint for ~2 s after it was entered
@@ -776,7 +826,11 @@ static void draw_foot(void)
         foot_hint(ha, hb);                            /* "OCT+ LOAD", "OCT- BACK": keycaps and their words */
         kh[0] = (khint_t){KC_OCTUP, ha + 5};
         kh[1] = (khint_t){KC_OCTDN, hb + 5};
-        if (rn) {                                     /* USER / PROJECT: "EDIT NAME" between them */
+        if (ph_kind == 2) {                           /* SONG: PRESETS and the cell's sequence between them */
+            kh[2] = kh[1];
+            kh[1] = (khint_t){KC_PRESETS, ph_};
+            cv_key_row(8, 232, 2, kh, 3, (act_ready() ? 1u : 0u) | (ph_on ? 2u : 0u) | 4u, T_BG);
+        } else if (rn) {                              /* USER / PROJECT: "EDIT NAME" between them */
             kh[2] = kh[1];
             kh[1] = (khint_t){KC_EDIT, cur_page()->graph == GR_EVENTS ? "DELETE" : "NAME"};
             cv_key_row(8, 232, 2, kh, 3, (act_ready() ? 1u : 0u) | (rn == 2u ? 2u : 0u) | 4u, T_BG);
@@ -829,6 +883,10 @@ static void draw_foot(void)
         if (!ui.home && pg->graph == GR_EVENTS && tx - 12 - (ex + 10) < need) {
             str_cpy(ti + 4, ti + 10, sizeof ti - 4);    /* #93: "AUTOMATION 6/6" -> "AUTO 6/6" where the sound's name */
             tx = r - text_w(&AF_S, ti) - (pi != ICON_NONE ? 16 : 0);   /* would be cut (MENU > LARGE) */
+        }
+        if (!ui.home && pg->graph == GR_SEQS && tx - 12 - (ex + 10) < need) {
+            str_cpy(ti + 3, ti + 8, sizeof ti - 3);     /* 1.6: "SEQUENCE 4/4" -> "SEQ 4/4" where the chain's text would be cut */
+            tx = r - text_w(&AF_S, ti) - (pi != ICON_NONE ? 16 : 0);
         }
         x = 8;
         if (FELUCCA_ICONS) {
