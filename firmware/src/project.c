@@ -475,6 +475,14 @@ static void proj_fm6_init(project_t *q)
         memcpy(q->fm6[t], FM6_INIT, FM6_PACKED);
     q->sum = proj_sum(q);
 }
+#if FELUCCA_PATBANK && FELUCCA_FLASH
+/* the sequence banks (patbank_store.c, included after this file: its object RAM is proj_wire) */
+static int pb_store_save(uint32_t s, uint32_t mask);
+static int pb_store_load(uint32_t s);
+static int pb_flush_live(void);
+static int pb_store_saved(uint32_t s, uint8_t *cur);
+static int pb_store_fetch(uint32_t s, uint32_t k, uint32_t q, step_t *st, uint8_t *len, pb_mo_t *mo);
+#endif
 static int proj_import_old(project_t *q, const void *b, int n);
 static int proj_import_any(project_t *q, const void *b, int n);
 /* every track's engine one this firmware has (DIGITAL, 1, is one: it converts): a project of another number
@@ -846,6 +854,15 @@ static int project_save_as(uint32_t slot, const char *name)
         ui_message("STOP TO SAVE");                     /* sequencer (storage_hw.c): only while stopped */
         return 1;
     }
+#if FELUCCA_PATBANK && FELUCCA_FLASH
+    if (flash_ok) {                                    /* the sequences first: the record is what makes the slot */
+        int rc = pb_store_save(slot & 3u, (1u << PB_NOBJ) - 1u);
+        if (rc) {
+            ui_message(rc == 3 ? "AUTOMATION FULL" : "SAVE ERROR");
+            return 2;
+        }
+    }
+#endif
     project_capture(p);
     if (name) {
         memset(p->name, 0, sizeof p->name);
@@ -1034,6 +1051,9 @@ static int project_restore_runtime(const project_t *input)
         pat_sig[k] = ~steps_sig(t);                     /* a project's steps are the user's */
     }
     undo_depth--;
+#if FELUCCA_PATBANK
+    pb_reset_to_live();                                 /* (the sequences: the loaded music is sequence 1; a store fills the rest) */
+#endif
     sync_reload = 1;
     ui.force = 1;
     ui_message("LOADED");
@@ -1050,6 +1070,10 @@ static void project_load(uint32_t slot)
     if (!project_restore_runtime(&proj_scratch)) {
         proj_cur = (uint8_t)(slot & 3u);
         pat_from_set((slot & 3u) + 1u);
+#if FELUCCA_PATBANK && FELUCCA_FLASH
+        if (flash_ok)
+            (void)pb_store_load(slot & 3u);             /* (the project's other sequences, and the one that plays) */
+#endif
     }
 }
 
@@ -1105,18 +1129,47 @@ static int project_used(uint32_t slot) { return proj_import(&proj_scratch, &proj
 static uint32_t chain_prepare(void)
 {
     uint32_t i, k, j, used = 0;
+#if FELUCCA_PATBANK && FELUCCA_FLASH
+    uint32_t na = 0, saved_ok = 0;
+    uint8_t alt_s[CHAIN_ALT], alt_k[CHAIN_ALT], alt_q[CHAIN_ALT], saved[4][NTRK];
+#endif
     if (transport_busy())
         return 2;
     if (!chain_valid(&chain_config) || !chain_config.count)
         return 1;
     for (i = 0; i < chain_config.count; i++)            /* the slots the lanes play (not the silent ones) */
         for (k = 0; k < NTRK; k++) {
-            uint32_t s = chain_config.row[i].slot[k];
-            if (s >= 4u || ((used >> s) & 1u))
+            uint32_t s = CH_SLOT(chain_config.row[i].slot[k]);
+            chain.src[i][k] = CHAIN_SILENT;
+            if (s >= 4u)
                 continue;
-            if (!project_used(s))
-                return 3u + s;
-            used |= 1u << s;
+            if (!((used >> s) & 1u)) {
+                if (!project_used(s))
+                    return 3u + s;
+                used |= 1u << s;
+            }
+            chain.src[i][k] = (uint8_t)s;
+#if FELUCCA_PATBANK && FELUCCA_FLASH
+            if (CH_SEQ(chain_config.row[i].slot[k]) && flash_ok) {   /* 1.6: a sequence chosen: the one the project was saved on is the slot's */
+                uint32_t q = CH_SEQ(chain_config.row[i].slot[k]) - 1u, a;
+                if (!((saved_ok >> s) & 1u)) {
+                    (void)pb_store_saved(s, saved[s]);
+                    saved_ok |= 1u << s;
+                }
+                if (q == saved[s][k])
+                    continue;
+                for (a = 0; a < na; a++)
+                    if (alt_s[a] == s && alt_k[a] == k && alt_q[a] == q)
+                        break;
+                if (a == na) {
+                    if (na >= CHAIN_ALT)
+                        return 16u;                         /* more sequences chosen than the song can hold */
+                    alt_s[na] = (uint8_t)s; alt_k[na] = (uint8_t)k; alt_q[na] = (uint8_t)q;
+                    na++;
+                }
+                chain.src[i][k] = (uint8_t)(8u + a);
+            }
+#endif
         }
     chain.config = chain_config;
     for (i = 0; i < 4u; i++)
@@ -1143,6 +1196,30 @@ static uint32_t chain_prepare(void)
                     chain.source[i].timing[k][j] = (int16_t)clamp(p->t[k].p[P_SLEN + j],
                         TP[P_SLEN + j].min, TP[P_SLEN + j].max);
             }
+#if FELUCCA_PATBANK && FELUCCA_FLASH
+            for (j = 0; j < na; j++)                    /* the chosen sequences of this slot: their own sources */
+                if (alt_s[j] == i) {
+                    chain_alt_t *al = &chain_alt[j];
+                    pb_mo_t pm;
+                    uint8_t len;
+                    uint32_t e, n = 0;
+                    k = alt_k[j];
+                    (void)pb_store_fetch(i, k, alt_q[j], al->step, &len, &pm);
+                    proj_steps(al->step);
+                    memcpy(al->timing, chain.source[i].timing[k], sizeof al->timing);
+                    al->timing[0] = (int16_t)clamp((int32_t)len, TP[P_SLEN].min, TP[P_SLEN].max);
+                    al->qnt = chain.source[i].qnt[k];
+                    memset(&al->motion, 0, sizeof al->motion);
+                    for (e = 0; e < pm.count && e < PB_MO_MAX; e++) {
+                        const motion_event_t *v = &pm.ev[e];
+                        if ((uint32_t)(v->place >> 6) != k || (MOTION_ID(v) >= P_FM1_ATK && p->t[k].engine != trk[k].eng_req))
+                            continue;
+                        al->motion.event[n++] = *v;
+                    }
+                    al->motion.count = (uint8_t)n;
+                    al->motion.on = pm.on ? (uint8_t)(1u << k) : 0u;
+                }
+#endif
         }
     RING_PUBLISH();
     chain.armed = 1;
@@ -1239,6 +1316,10 @@ static uint32_t autosave_sig(void)
         if (i != G_SLOT && i != G_NAME && i != G_LOAD && i != G_SAVE)
             h = as_mix(h, &song.g[i], sizeof song.g[i]);
     h = as_mix(h, &motion, sizeof motion);
+#if FELUCCA_PATBANK
+    pb_sync_all();                                      /* (the sequences: what the playing ones changed is in pb_gen) */
+    h = as_mix(h, &pb_gen, sizeof pb_gen);
+#endif
     h = as_mix(h, &chain_config, sizeof chain_config);
     return as_mix(h, proj_name, sizeof proj_name);
 }
@@ -1277,6 +1358,12 @@ static void autosave_poll(void)
         return;
     as.last = fm1_ms;
     as.wrote = 1;
+#if FELUCCA_PATBANK
+    if (pb_flush_live()) {                              /* the sequences first (their store, the changed objects) */
+        as.err = 1;
+        return;
+    }
+#endif
     project_capture(&proj_scratch);
     proj_wire_gen++;
     as.err = !proj_pack(&proj_wire, &proj_scratch) || st_save(OBJ_AUTOSAVE, &proj_wire, sizeof proj_wire) != 0;
@@ -1301,6 +1388,9 @@ static int autosave_boot(int allowed)
         if (n > 0 && proj_import(&proj_scratch, &proj_wire, n)) {
             proj_bound(&proj_scratch);
             if (!project_restore_runtime(&proj_scratch)) {
+#if FELUCCA_PATBANK
+                (void)pb_store_load(PB_LIVE);
+#endif
                 ui_message("RESTORED");
                 rc = 1;
             }

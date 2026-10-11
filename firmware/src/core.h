@@ -16,6 +16,14 @@
 #ifndef FELUCCA_SLICE
 #define FELUCCA_SLICE 1          /* the SLICE engine (eng_slice.c), engine 13; FELUCCA_SLICE=0 builds without it */
 #endif
+#ifndef FELUCCA_PATBANK
+#define FELUCCA_PATBANK 1        /* eight sequences per track (patbank.c), kept in the flash the three user sample slots (USR1..3)
+                                  * had: FELUCCA_PATBANK=0 builds the earlier firmware, with the user samples */
+#endif
+#ifndef FELUCCA_USERSMP
+#define FELUCCA_USERSMP (!FELUCCA_PATBANK)   /* the three user sample slots: off with the sequence banks (their flash); the host tests of the
+                                              * sample engines build with FELUCCA_USERSMP=1 */
+#endif
 #ifndef FELUCCA_FM4
 #define FELUCCA_FM4 0            /* the DIGITAL engine (eng_digital.c, four-operator FM): kept in the tree, not built
                                   * by default; replaced by FM6, its sounds convert (fm4_convert.c) */
@@ -288,6 +296,12 @@ _Static_assert(sizeof(motion_store_t) == 388u, "motion disk layout (FUN10)");
  * (chain_v9_t, FUN6..FUN9): it loads as a section with the four on it (song_chain.c chain_from_v9) */
 #define CHAIN_SILENT 4u
 typedef struct { uint8_t slot[NTRK], repeat; } chain_row_t;
+/* 1.6: a lane's byte is its project slot (0..3, CHAIN_SILENT: the low three bits) and its sequence (patbank.c): 0 the one the
+ * project was saved on (every song before this), 1..8 that sequence of the project's tracks. Older firmware reads a song
+ * with a sequence chosen as no song (chain_valid) */
+#define CH_SLOT(b) ((uint32_t)(b) & 7u)
+#define CH_SEQ(b) ((uint32_t)(b) >> 3)
+#define CH_MAKE(slot, seq) ((uint8_t)((uint32_t)(slot) | (uint32_t)(seq) << 3))
 typedef struct {
     uint8_t count, rsv[3];
     chain_row_t row[CHAIN_ROWS];
