@@ -1183,7 +1183,7 @@ static void setup(int s)
     case S_SEQUENCE_CHAIN:
     case S_SEQUENCE_NEXT: {
         uint32_t t, q;
-        memset(pb_next, 0, sizeof pb_next); memset(pb_start, 0, sizeof pb_start); memset(pb_chain, 0, sizeof pb_chain);
+        memset(pb_next, 0, sizeof pb_next); memset(pb_cmask, 0, sizeof pb_cmask);
         ui_prefs2 &= (uint8_t)~(PREF_SEQ_END >> 16); song.playing = 0;
         for (t = 0; t < NTRK; t++)
             for (q = 0; q < PB_N; q++) {
@@ -1194,8 +1194,8 @@ static void setup(int s)
             }
         (void)pb_select(0, 2); (void)pb_select(2, 1); (void)pb_select(3, 7);
         song.sel = s == S_SEQUENCE_FULL ? 3 : 0;
-        if (s == S_SEQUENCE_CHAIN) {                   /* 1.6 CHAIN: T1 chains 4 from its 3rd, T3 2 from its 2nd (PRESETS) */
-            song.sel = 0; (void)pb_set_chain(0, 4); song.sel = 2; (void)pb_set_chain(2, 2);
+        if (s == S_SEQUENCE_CHAIN) {                   /* 1.6 CHAIN: T1 chains its 3rd, 4th and 6th, T3 its 2nd and 7th (PRESETS) */
+            pb_chain_set(0, 2, 1); pb_chain_set(0, 3, 1); pb_chain_set(0, 5, 1); pb_chain_set(2, 1, 1); pb_chain_set(2, 6, 1);
         }
         if (s == S_SEQUENCE_NEXT) {                    /* SEQ SWITCH END, playing: T1 and T3 wait (for 6 and 1) */
             ui_prefs2 |= (uint8_t)(PREF_SEQ_END >> 16); song.playing = 1;

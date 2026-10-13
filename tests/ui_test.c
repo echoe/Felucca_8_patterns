@@ -9049,23 +9049,27 @@ static int test_seq_end_knob(void)
     menu_put(MI_SEQSW, 0);
     song.playing = 0;
     bad += check("1.6 SEQUENCE, SEQ SWITCH END: the knob steps from the waiting sequence (far ones reachable), the last step switches", ok);
-    /* PRESETS on SEQUENCE: how many sequences chain from the selected track's (not the sound) */
+    /* PRESETS on SEQUENCE: right chains the selected track's sequence, left un-chains it (the sound stays) */
     ui_power_on();
+    pb_clear_all();                                             /* (every track on sequence 1, nothing chained) */
     go_title("SEQUENCE"); frame();
     {
         uint32_t snd = TSEL->preset, sel = song.sel;
-        ok = cur_page()->graph == GR_SEQS;
+        ok = cur_page()->graph == GR_SEQS && pb_cur[sel] == 0 && !pb_chained(sel, 0);
         turn(EN_PRESET, 1); frames(4);
-        ok &= pb_run(sel) == 2 && TSEL->preset == snd;
+        ok &= pb_chained(sel, 0) && pb_chain_count(sel) == 0 && TSEL->preset == snd;       /* one alone: no chain yet */
+        turn(EN_K1, 2); frames(4);
+        ok &= pb_cur[sel] == 2 && !pb_chained(sel, 2);
         turn(EN_PRESET, 2); frames(4);
-        ok &= pb_run(sel) == 4;
-        turn(EN_PRESET, 20); frames(4);
-        ok &= pb_run(sel) == PB_N - pb_start[sel];
-        turn(EN_PRESET, -20); frames(4);
-        ok &= pb_run(sel) == 1 && !pb_chain[sel];
-        turn(EN_K2, 0);
-        bad += check("1.6 SEQUENCE: PRESETS sets the chain's length (1..8 from the first), the sound stays", ok);
+        ok &= pb_chained(sel, 2) && pb_chain_count(sel) == 2 && pb_cmask[sel] == (1u | 1u << 2);
+        turn(EN_PRESET, -1); frames(4);
+        ok &= !pb_chained(sel, 2) && pb_chained(sel, 0) && pb_chain_count(sel) == 0;
+        turn(EN_PRESET, -5); frames(4);                         /* (it is already not chained: stays so) */
+        ok &= !pb_chained(sel, 2) && TSEL->preset == snd;
+        memset(pb_cmask, 0, sizeof pb_cmask);
+        bad += check("1.6 SEQUENCE: PRESETS chains (right) or un-chains (left) the selected track's sequence, the sound stays", ok);
     }
+
     /* SONG: PRESETS turns the sequence the selected cell plays (it was KNOB 1's twin); KNOB 3 (the project) resets it */
     ui_power_on();
     chain_defaults(&chain_config);
@@ -9093,10 +9097,10 @@ static int test_seq_end_knob(void)
         char h[16]; uint32_t on;
         ui_power_on();
         go_title("SEQUENCE"); frame();
-        song.sel = 1; pb_need(); pb_chain[1] = 0; pb_start[1] = 0;
+        song.sel = 1; pb_need(); pb_cmask[1] = 0;
         ok = preset_hint(h, &on) == 1 && str_eq(h, "CHAIN OFF");
-        (void)pb_set_chain(1, 3);
-        ok &= preset_hint(h, &on) == 1 && str_eq(h, "CHAIN 3");
+        pb_chain_set(1, pb_target(1), 1);
+        ok &= preset_hint(h, &on) == 1 && str_eq(h, "CHAIN ON");
         chain_defaults(&chain_config);
         chain_config.count = 2; chain_config.row[0].slot[0] = CH_MAKE(1u, 3u); chain_config.row[1].slot[0] = CH_MAKE(CHAIN_SILENT, 0u);
         go_title("SONG"); frame();
@@ -9110,7 +9114,7 @@ static int test_seq_end_knob(void)
         ok &= preset_hint(h, &on) == 2 && !on;                           /* the ADD row too */
         go_home(); frame();
         ok &= preset_hint(h, &on) == 0;
-        pb_chain[1] = 0;
+        pb_cmask[1] = 0;
         chain_defaults(&chain_config);
         bad += check("1.6 the footer says what PRESETS does: the chain in the sound's place on SEQUENCE, the cell's sequence on SONG", ok);
     }

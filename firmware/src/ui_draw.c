@@ -724,7 +724,7 @@ static void sound_name(const track_t *t, char *b)
 }
 
 #if FELUCCA_PATBANK
-/* What the PRESETS knob does on SEQ > SEQUENCE (the selected track's chain: "CHAIN 4", shown where the sound's name is: PRESETS
+/* What the PRESETS knob does on SEQ > SEQUENCE (is the selected track's sequence chained: "CHAIN ON", shown where the sound's name is: PRESETS
  * is not the sound there) and on SONG (the selected cell's
  * sequence: "SEQ 3", "SAVED": the one the project was saved on), for the footer's first row. 0: not such a page. *on: it would
  * act now (a SONG cell that plays a project) */
@@ -735,12 +735,7 @@ static int preset_hint(char *b, uint32_t *on)
     if (ui.home)
         return 0;
     if (pg->graph == GR_SEQS) {
-        str_cpy(b, "CHAIN ", 12);
-        if (pb_run(song.sel) > 1u) {
-            b[6] = (char)('0' + pb_run(song.sel));
-            b[7] = 0;
-        } else
-            str_cpy(b + 6, "OFF", 4);
+        str_cpy(b, pb_chained(song.sel, pb_target(song.sel)) ? "CHAIN ON" : "CHAIN OFF", 12);
         return 1;
     }
     if (pg->graph == GR_SONG) {
@@ -1060,8 +1055,8 @@ static void draw_columns(void)
         for (c = 0; c < NTRK; c++) {
             lb[1] = (char)('1' + c);
             sq[0] = (char)('1' + pb_target(c));                 /* (a waiting switch: the one it waits for, "NEXT") */
-            cn[1] = (char)('0' + pb_run(c));
-            draw_column(c, lb, sq, pb_next[c] ? "NEXT" : pb_run(c) > 1u ? cn : "/8", c == song.sel ? T_ACCENT : VAL(c),
+            cn[1] = (char)('0' + pb_chain_count(c));
+            draw_column(c, lb, sq, pb_next[c] ? "NEXT" : pb_chain_count(c) ? cn : "/8", c == song.sel ? T_ACCENT : VAL(c),
                         (int32_t)pb_target(c) * 1000 / 7, ICON_X_PATTERN);
         }
         return;
