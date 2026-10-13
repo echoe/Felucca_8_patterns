@@ -303,18 +303,22 @@ int main(void)
         bad += check("SEQ SWITCH: NOW at once; END waits for the last step (or a wrap seen), stopped switches at once, same slot cancels", ok);
     }
 
-    {   /* CHAIN: sequences start .. start + n - 1 play one after the other, the last back to the first */
+    {   /* CHAIN: only the sequences the user chained play one after the other (in order, the last back to the first) */
         uint32_t pass, pol;
         reset();
         song.playing = 1; trk[0].p[P_SLEN] = 16;
-        (void)pb_request(0, 1);                                    /* NOW: sequence 2 chosen: the chain's first */
-        ok = pb_start[0] == 1 && pb_run(0) == 1 && pb_chain_next(0) == -1;
-        ok &= pb_set_chain(0, 3) == 3 && pb_run(0) == 3 && pb_chain_next(0) == 2;
-        memset(pb_last, 0, sizeof pb_last);                        /* (the polls of an earlier test) */
-        for (i = 0; i < 4u; i++) { trk[0].seq_idx = i; for (t = 0; t < NTRK; t++) (void)pb_due(t); }
-        ok &= pb_cur[0] == 1;                                      /* mid pass: nothing */
+        ok = pb_chain_count(0) == 0 && !pb_chained(0, 1);
+        pb_chain_set(0, 1, 1); pb_chain_set(0, 3, 1);
+        ok &= pb_chain_count(0) == 2 && pb_chained(0, 1) && pb_chained(0, 3) && !pb_chained(0, 2);
+        pb_chain_set(0, 6, 1); pb_chain_set(0, 9, 1);              /* (no such sequence: nothing) */
+        ok &= pb_chain_count(0) == 3 && pb_cmask[0] == (1u << 1 | 1u << 3 | 1u << 6);
+        (void)pb_request(0, 1);
+        ok &= pb_cur[0] == 1 && pb_chain_next(0) == 3;
+        pb_chain_set(0, 4, 1); pb_chain_set(0, 4, 0);
+        ok &= pb_cmask[0] == (1u << 1 | 1u << 3 | 1u << 6);
+        memset(pb_last, 0, sizeof pb_last);
         {
-            static const uint8_t want[] = {2, 3, 1, 2, 3, 1};     /* the end of each pass: the next, the last back to the first */
+            static const uint8_t want[] = {3, 6, 1, 3, 6, 1};     /* only the chained ones: 2, 4, 5, 7, 8 never play */
             for (pass = 0; pass < 6u; pass++) {
                 for (pol = 0; pol < 5u; pol++) {                   /* many polls on the last step: one switch */
                     trk[0].seq_idx = 15;
@@ -325,42 +329,45 @@ int main(void)
                 trk[0].seq_idx = 7; (void)pb_due(0);
             }
         }
-        ok &= pb_start[0] == 1 && pb_set_chain(0, 8) == 7;        /* from the second: 7 at most */
-        (void)pb_request(0, 6);                                    /* chosen: 7th, a chain of 2 left (7th, 8th) */
-        ok &= pb_start[0] == 6 && pb_run(0) == 2 && pb_set_chain(0, 8) == 2;
+        (void)pb_request(0, 4);                                    /* a sequence not chained plays by itself, looping */
+        ok &= pb_cur[0] == 4 && pb_chain_next(0) == -1;
+        for (pass = 0; pass < 3u; pass++) { trk[0].seq_idx = 15; (void)pb_due(0); trk[0].seq_idx = 7; (void)pb_due(0); }
+        ok &= pb_cur[0] == 4;
+        (void)pb_request(0, 6);                                    /* a chained one chosen: the chain goes on from it */
         trk[0].seq_idx = 15; (void)pb_due(0);
-        ok &= pb_cur[0] == 7;
-        trk[0].seq_idx = 3; (void)pb_due(0); trk[0].seq_idx = 15; (void)pb_due(0);
-        ok &= pb_cur[0] == 6;
-        (void)pb_set_chain(0, 1);                                  /* 1: off */
-        trk[0].seq_idx = 3; (void)pb_due(0); trk[0].seq_idx = 15; (void)pb_due(0);
-        ok &= pb_cur[0] == 6 && pb_run(0) == 1 && !pb_chain[0];
+        ok &= pb_cur[0] == 1 && pb_chain_next(0) == 3;
+        pb_chain_set(0, 3, 0); pb_chain_set(0, 6, 0);              /* only one left chained: no chain */
+        ok &= pb_chain_count(0) == 0 && pb_chain_next(0) == -1;
+        trk[0].seq_idx = 7; (void)pb_due(0); trk[0].seq_idx = 15; (void)pb_due(0);
+        ok &= pb_cur[0] == 1;
         song.playing = 0;                                          /* stopped: a chain does not advance */
-        (void)pb_set_chain(0, 2); trk[0].seq_idx = 15; (void)pb_due(0);
-        ok &= pb_cur[0] == 6;
-        bad += check("CHAIN: the sequences play one after the other, once a pass, the last back to the first; a chosen one starts it", ok);
-        /* a waiting switch (SEQ SWITCH END) wins over the chain's next, and starts a new chain */
+        pb_chain_set(0, 2, 1); (void)pb_request(0, 2); trk[0].seq_idx = 15; (void)pb_due(0);
+        ok &= pb_cur[0] == 2;
+        bad += check("CHAIN: only the sequences the user chained play one after the other; the others loop; one alone is no chain", ok);
+        /* a waiting switch (SEQ SWITCH END) goes first; a sequence not chained then loops */
         reset();
         menu_put(MI_SEQSW, 1); song.playing = 1; trk[0].p[P_SLEN] = 16;
-        (void)pb_set_chain(0, 3); (void)pb_request(0, 5);          /* waits for sequence 6 */
+        pb_chain_set(0, 0, 1); pb_chain_set(0, 1, 1); pb_chain_set(0, 2, 1);
+        (void)pb_request(0, 5);                                    /* waits for sequence 6, not chained */
         trk[0].seq_idx = 15; (void)pb_due(0);
-        ok = pb_cur[0] == 5 && pb_start[0] == 5 && pb_run(0) == 3 && pb_chain_next(0) == 6;
+        ok = pb_cur[0] == 5 && pb_chain_next(0) == -1 && pb_chain_count(0) == 3;
         menu_put(MI_SEQSW, 0);
-        bad += check("CHAIN: a waiting switch goes first and its sequence starts the chain", ok);
+        bad += check("CHAIN: a waiting switch goes first; the chain's masks stay", ok);
         /* the chain is saved with the project and with the live music */
         reset();
-        (void)pb_request(0, 2); (void)pb_set_chain(0, 4); (void)pb_request(2, 5); (void)pb_set_chain(2, 3);
+        (void)pb_request(0, 2); pb_chain_set(0, 2, 1); pb_chain_set(0, 4, 1); pb_chain_set(0, 7, 1);
+        pb_chain_set(2, 5, 1); pb_chain_set(2, 6, 1);
         ok = project_save_as(0, "CH") == 0;
         memset(trk, 0, sizeof trk); memset(&motion, 0, sizeof motion); memset(motion_active, 0, sizeof motion_active);
         host_tracks_init(); pb_ready = 0; pb_clear_all(); memset(proj_slot, 0, sizeof proj_slot);
-        ok &= pb_run(0) == 1;
+        ok &= pb_chain_count(0) == 0;
         project_load(0);
-        ok &= pb_start[0] == 2 && pb_run(0) == 4 && pb_cur[0] == 2 && pb_start[2] == 5 && pb_run(2) == 3 && pb_run(1) == 1;
-        (void)pb_request(1, 3); (void)pb_set_chain(1, 2);
+        ok &= pb_cmask[0] == (1u << 2 | 1u << 4 | 1u << 7) && pb_cmask[2] == (1u << 5 | 1u << 6) && !pb_cmask[1] && pb_cur[0] == 2;
+        pb_chain_set(1, 3, 1); pb_chain_set(1, 4, 1); pb_chain_set(0, 4, 0);
         as_run(120000u);
         power_cycle();
-        ok &= pb_start[1] == 3 && pb_run(1) == 2 && pb_start[0] == 2 && pb_run(0) == 4;
-        bad += check("CHAIN: kept by project SAVE / LOAD and by the autosave (the live store)", ok);
+        ok &= pb_cmask[1] == (1u << 3 | 1u << 4) && pb_cmask[0] == (1u << 2 | 1u << 7);
+        bad += check("CHAIN: the chained sequences are kept by project SAVE / LOAD and by the autosave (the live store)", ok);
     }
 
     {   /* SONG: a lane can play any of its project's sequences (CH_SEQ), from the project's store */

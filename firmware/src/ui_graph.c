@@ -1895,7 +1895,7 @@ static void draw_seqs(void)
         uint32_t sel = c == song.sel, mask = 0, sig;
         for (r = 0; r < PB_N; r++)
             mask |= (uint32_t)pb_filled(c, r) << r;
-        sig = (mask | (uint32_t)pb_cur[c] << 8 | sel << 12 | (uint32_t)pb_next[c] << 16 | (uint32_t)pb_start[c] << 20 | pb_run(c) << 24) * 2654435761u + 1u;
+        sig = (mask | (uint32_t)pb_cur[c] << 8 | sel << 12 | (uint32_t)pb_next[c] << 16 | (uint32_t)pb_cmask[c] << 20) * 2654435761u + 1u;
         if (!ui.force && sig == sqs_sig[c])
             continue;
         sqs_sig[c] = sig;
@@ -1908,7 +1908,7 @@ static void draw_seqs(void)
             uint16_t ink = on || nx ? T_INK : full ? (sel ? T_TEXT : T_MID) : T_DIM;
             char b[2] = {(char)('1' + r), 0};
             cv_rrect(0, y, CARD_W, 12, 3, fill, T_BG);
-            if (pb_run(c) > 1u && r >= pb_start[c] && r < pb_start[c] + pb_run(c))   /* a chained one: a bar at its left */
+            if (pb_chained(c, r))                       /* a chained one: a bar at its left */
                 cv_rrect(3, y + 3, 3, 6, 1, on || nx ? T_INK : T_MID, fill);
             GFX_HOOK_ALIGN(0, y, CARD_W, y + 12, AL_HV, "sequence cell digit centred");
             cv_text_in(0, y + CAP_IN(S, 12), CARD_W, &AF_S, b, ink, fill);

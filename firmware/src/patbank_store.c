@@ -33,9 +33,11 @@ static uint32_t pb_build(uint32_t o)
     uint32_t n = pb_obj_pats(o), pos = PB_HDR, q;
     memset(pb_wire, 0, PB_HDR);
     pb_wire[0] = 'P'; pb_wire[1] = 'B'; pb_wire[2] = 1; pb_wire[3] = (uint8_t)o;
-    if (o == PB_META_O)                                 /* CHAIN: per track start (3 bits) and length - 1 (3 bits) */
+    if (o == PB_META_O) {                               /* CHAIN: per track the mask of the chained sequences (version 2) */
+        pb_wire[2] = 2;
         for (q = 0; q < NTRK; q++)
-            pb_wire[4u + q] = (uint8_t)(pb_start[q] << 3 | (pb_run(q) - 1u));
+            pb_wire[4u + q] = pb_cmask[q];
+    }
     memcpy(pb_wire + pos, pb_pat[o * PB_PER], n * PB_PAT_B);
     pos += n * PB_PAT_B;
     if (o == PB_META_O) {
@@ -81,7 +83,7 @@ static int pb_store_load(uint32_t s)
     uint8_t cur[NTRK], len[PB_NSEQ], cnt[PB_NSEQ], on[PB_NSEQ];
     pb_reset_to_live();
     n = (uint32_t)st_load(OBJ_PB0 + s * PB_NOBJ + PB_META_O, pb_wire, sizeof pb_wire);
-    if ((int)n < 0 || n < PB_META_FIX || pb_wire[0] != 'P' || pb_wire[1] != 'B' || pb_wire[2] != 1 || pb_wire[3] != PB_META_O)
+    if ((int)n < 0 || n < PB_META_FIX || pb_wire[0] != 'P' || pb_wire[1] != 'B' || (pb_wire[2] != 1 && pb_wire[2] != 2) || pb_wire[3] != PB_META_O)
         return 0;
     pos = PB_HDR + 2u * PB_PAT_B;
     memcpy(cur, pb_wire + pos, NTRK); pos += NTRK;
@@ -102,11 +104,8 @@ static int pb_store_load(uint32_t s)
         if (pos + tot * sizeof(motion_event_t) > n) return 0;
     }
     memcpy(pb_pat[PB_META_O * PB_PER], pb_wire + PB_HDR, 2u * PB_PAT_B);
-    for (t = 0; t < NTRK; t++) {                        /* CHAIN (the header bytes were 0 before it: start 1, no chain) */
-        uint32_t b = pb_wire[4u + t], a = (b >> 3) & 7u, n = (b & 7u) + 1u;
-        pb_start[t] = (uint8_t)a;
-        pb_chain[t] = (uint8_t)(n > 1u && a + n <= PB_N ? n : 0u);
-    }
+    for (t = 0; t < NTRK; t++)                          /* CHAIN: version 2 has the masks (version 1: a start and a length: none) */
+        pb_cmask[t] = pb_wire[2] == 2 ? pb_wire[4u + t] : 0u;
     for (q = 0; q < PB_NSEQ; q++) {
         uint32_t k;
         pb_mo[q].count = 0;
@@ -144,7 +143,7 @@ static int pb_store_saved(uint32_t s, uint8_t *cur)
     uint32_t n, t;
     memset(cur, 0, NTRK);
     n = (uint32_t)st_load(OBJ_PB0 + s * PB_NOBJ + PB_META_O, pb_wire, sizeof pb_wire);
-    if ((int)n < 0 || n < PB_META_FIX || pb_wire[0] != 'P' || pb_wire[1] != 'B' || pb_wire[2] != 1 || pb_wire[3] != PB_META_O)
+    if ((int)n < 0 || n < PB_META_FIX || pb_wire[0] != 'P' || pb_wire[1] != 'B' || (pb_wire[2] != 1 && pb_wire[2] != 2) || pb_wire[3] != PB_META_O)
         return 0;
     for (t = 0; t < NTRK; t++)
         cur[t] = pb_wire[PB_HDR + 2u * PB_PAT_B + t] < PB_N ? pb_wire[PB_HDR + 2u * PB_PAT_B + t] : 0u;
@@ -162,7 +161,7 @@ static int pb_store_fetch(uint32_t s, uint32_t k, uint32_t q, step_t *st, uint8_
     *len = (uint8_t)TP[P_SLEN].def;
     memset(mo, 0, sizeof *mo);
     n = (uint32_t)st_load(OBJ_PB0 + s * PB_NOBJ + PB_META_O, pb_wire, sizeof pb_wire);
-    if ((int)n < 0 || n < PB_META_FIX || pb_wire[0] != 'P' || pb_wire[1] != 'B' || pb_wire[2] != 1 || pb_wire[3] != PB_META_O)
+    if ((int)n < 0 || n < PB_META_FIX || pb_wire[0] != 'P' || pb_wire[1] != 'B' || (pb_wire[2] != 1 && pb_wire[2] != 2) || pb_wire[3] != PB_META_O)
         return 1;
     (void)cur;
     pos = PB_HDR + 2u * PB_PAT_B + NTRK;

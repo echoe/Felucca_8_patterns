@@ -415,19 +415,18 @@ static void seq_switch_ui(uint32_t t, uint32_t s)
     } else
         seq_after(t, rc);
 }
-/* PRESETS on SEQ > SEQUENCE: how many sequences chain from the selected track's (1: none) */
+/* PRESETS on SEQ > SEQUENCE: the selected track's sequence (the one waiting, else the one playing) is chained (turned right) or
+ * not (left) with the other chained ones */
 static void seq_chain_ui(uint32_t t, int32_t steps)
 {
-    char w[10] = {'T', (char)('1' + t % NTRK), ' ', 'C', 'H', 'A', 'I', 'N', 0, 0}, v[4] = {0, 0, 0, 0};
-    uint32_t n;
+    char w[10] = {'T', (char)('1' + t % NTRK), ' ', 'S', 'E', 'Q', ' ', 0, 0, 0};
+    uint32_t q;
     t %= NTRK;
     pb_need();
-    n = pb_set_chain(t, (uint32_t)clamp((int32_t)pb_run(t) + steps, 1, (int32_t)PB_N));
-    if (n > 1u) {
-        v[0] = (char)('0' + n);
-        ui_say(w, v);
-    } else
-        ui_say(w, "OFF");
+    q = pb_target(t);
+    pb_chain_set(t, q, steps > 0);
+    w[7] = (char)('1' + q);
+    ui_say(w, steps > 0 ? " CHAINED" : " NOT CHAINED");
     ui.force = 1;
 }
 /* main loop, every pass (main.c) */

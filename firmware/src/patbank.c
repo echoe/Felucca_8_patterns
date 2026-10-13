@@ -32,9 +32,7 @@ static pb_mo_t pb_mo[PB_NSEQ] __attribute__((section(".pool")));   /* (the playi
 static uint8_t pb_next[NTRK];            /* a switch waiting for the end of the sequence playing: the slot + 1, 0 none (SEQ SWITCH END) */
 static uint8_t pb_last[NTRK];            /* the step each track was on when pb_due last looked */
 static uint8_t pb_fired[NTRK];           /* a switch happened on this pass's last step: not again until the pass is under way */
-static uint8_t pb_start[NTRK];           /* CHAIN: the sequence a track's chain starts from (the one last chosen) */
-static uint8_t pb_chain[NTRK];           /* CHAIN: how many sequences, from pb_start, play one after the other (0, 1: none) */
-static uint8_t pb_keep;                  /* pb_select called by the chain: pb_start stays */
+static uint8_t pb_cmask[NTRK];           /* CHAIN: bit s set, sequence s of the track is one the user chained (patbank.c pb_chain_next) */
 static uint8_t pb_ready;
 static uint8_t pb_dirty;                 /* bit o: the live store's object o is older than the mirror */
 static uint32_t pb_gen;                  /* + 1 per change (autosave_sig) */
@@ -104,8 +102,7 @@ static void pb_clear_all(void)
     memset(pb_mo, 0, sizeof pb_mo);
     memset(pb_cur, 0, sizeof pb_cur);
     memset(pb_next, 0, sizeof pb_next);
-    memset(pb_start, 0, sizeof pb_start);
-    memset(pb_chain, 0, sizeof pb_chain);
+    memset(pb_cmask, 0, sizeof pb_cmask);
     memset(pb_fired, 0, sizeof pb_fired);
     memset(pb_last, 0, sizeof pb_last);
     for (q = 0; q < PB_NSEQ; q++)
@@ -200,43 +197,47 @@ static int pb_select(uint32_t t, uint32_t slot)
     motion_unguard(f);
     pb_cur[t] = (uint8_t)slot;
     pb_next[t] = 0;
-    if (!pb_keep)
-        pb_start[t] = (uint8_t)slot;              /* (a sequence chosen starts a chain from it) */
     pb_dirty |= (uint8_t)(1u << (q / PB_PER) | 1u << (old / PB_PER) | 1u << PB_META_O);
     pb_gen++;
     return 0;
 }
 
-/* CHAIN: a track's sequences pb_start .. pb_start + n - 1 play one after the other (the last one back to the first), a
- * sequence at the end of each pass of the one playing; n 0 or 1: no chain. The sequence last chosen is the first. A chain is
- * whole sequences of 1..64 steps each: 8 x 64 steps at most */
-static uint32_t pb_run(uint32_t t)
+/* CHAIN: the sequences the user chained (pb_cmask, PRESETS on SEQ > SEQUENCE) of a track play one after the other, in
+ * order, the last back to the first, a sequence at the end of each pass of the one playing. Only those: a sequence not chained
+ * plays by itself, looping, and so does the only one chained. Whole sequences of 1..64 steps each: 8 x 64 steps at most */
+static uint32_t pb_chain_count(uint32_t t)             /* how many sequences are chained, 0 when fewer than two */
 {
-    uint32_t n = pb_chain[t % NTRK] ? pb_chain[t % NTRK] : 1u, a = pb_start[t % NTRK];
-    return a + n > PB_N ? PB_N - a : n;
+    uint32_t m = pb_cmask[t % NTRK], n = 0;
+    while (m) {
+        n += m & 1u;
+        m >>= 1;
+    }
+    return n > 1u ? n : 0u;
 }
-static uint32_t pb_set_chain(uint32_t t, uint32_t n)   /* the length it got (1: off) */
+static int pb_chained(uint32_t t, uint32_t slot) { return slot < PB_N && ((pb_cmask[t % NTRK] >> slot) & 1u); }
+static void pb_chain_set(uint32_t t, uint32_t slot, int on)   /* chain (or not) sequence slot of track t */
 {
-    uint32_t a;
+    uint8_t m;
     t %= NTRK;
     pb_need();
-    a = pb_start[t];
-    n = n < 1u ? 1u : n > PB_N - a ? PB_N - a : n;
-    if (n != pb_run(t) || pb_chain[t] != (uint8_t)n) {
-        pb_chain[t] = (uint8_t)(n > 1u ? n : 0u);
+    if (slot >= PB_N)
+        return;
+    m = on ? (uint8_t)(pb_cmask[t] | 1u << slot) : (uint8_t)(pb_cmask[t] & ~(1u << slot));
+    if (m != pb_cmask[t]) {
+        pb_cmask[t] = m;
         pb_dirty |= 1u << PB_META_O;
         pb_gen++;
     }
-    return n;
 }
-static int pb_chain_next(uint32_t t)                   /* the sequence after the one playing; -1 no chain */
+static int pb_chain_next(uint32_t t)                   /* the chained sequence after the one playing; -1: it is no chained one, or alone */
 {
-    uint32_t n = pb_run(t), a = pb_start[t], c = pb_cur[t];
-    if (n < 2u)
+    uint32_t c = pb_cur[t % NTRK], i;
+    if (!pb_chain_count(t) || !pb_chained(t, c))
         return -1;
-    if (c < a || c >= a + n)
-        return (int)a;
-    return (int)(c + 1u < a + n ? c + 1u : a);
+    for (i = 1; i < PB_N; i++)
+        if (pb_chained(t, (c + i) % PB_N))
+            return (int)((c + i) % PB_N);
+    return -1;
 }
 
 /* the sequence a knob step starts from: the one waiting (SEQ SWITCH END) if there is one, else the one playing. Stepping from
@@ -295,9 +296,7 @@ static int pb_due(uint32_t t)
     nx = at_end ? pb_chain_next(t) : -1;
     if (nx < 0)
         return 0;
-    pb_keep = 1;
     rc = pb_select(t, (uint32_t)nx);
-    pb_keep = 0;
     pb_fired[t] = 1;
     return rc ? -rc : 1;
 }
