@@ -230,6 +230,8 @@ static uint32_t mod_dst_icon(const track_t *t, int32_t d)
     d = clamp(d, 0, MD_N - 1);
     if (d == MD_DEPTH)
         return ICON_LFO_WAVE;
+    if (d >= MD_VEL)                                   /* (1.5.6: VEL, TIME) */
+        return d == MD_VEL ? ICON_ACCENT : ICON_TIME;
     if (d < MD_E1)
         return I[d];
     id = P_E0 + (uint32_t)(d - MD_E1);
@@ -270,6 +272,7 @@ static uint32_t page_icon(const page_t *pg)
     case GR_TRK: return ICON_X_MIXER;         /* MIXER (HOME): vertical faders */
     case GR_PATS: return ICON_X_PATTERN;      /* SAVE > PHRASES: the pattern loader */
     case GR_SEQS: return ICON_X_PATTERN;      /* SEQ > SEQUENCE */
+    case GR_GENS: return ICON_ARP;            /* ARP > GEN */
     case GR_SONG: return ICON_X_SONG;         /* SONG: the disc */
     case GR_EVENTS: return motion_icon();     /* AUTOMATION */
     default: return ICON_NONE;

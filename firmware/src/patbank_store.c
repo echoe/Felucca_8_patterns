@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only
  * Copyright (C) 2026 Leo Kuroshita (@kurogedelic), Hügelton Instruments */
 /* The sequence banks in flash (patbank.c): store s (0..3 the projects A..D, PB_LIVE the music as it is now), six objects
- * OBJ_PB0 + 6 s + o, each an A/B pair of storage.c. Payload: 8 bytes {'P', 'B', 1, o, 0 x 4}, then
+ * OBJ_PB0 + 6 s + o, each an A/B pair of storage.c. Payload: 8 bytes {'P', 'B', 1, o, 0 x 4}, then (objects 0..2 are version 2 since
+ * the ARP's GEN: their last four bytes are GEN's DENS, CHORD, EVOLVE of the four tracks; the meta object: the chained masks there)
  *   o < 5   six sequences (576 bytes each), 3464 bytes
  *   o = 5   the last two sequences, the sequence each track plays (4), the 32 LENs, per sequence its automation record
  *           count and ON (2 bytes), then the records of the sequences with some (3 bytes each, in order); the playing
@@ -33,6 +34,11 @@ static uint32_t pb_build(uint32_t o)
     uint32_t n = pb_obj_pats(o), pos = PB_HDR, q;
     memset(pb_wire, 0, PB_HDR);
     pb_wire[0] = 'P'; pb_wire[1] = 'B'; pb_wire[2] = 1; pb_wire[3] = (uint8_t)o;
+    if (o < GS_N) {                                     /* GEN (version 2): the objects 0..2 carry DENS, CHORD, EVOLVE */
+        pb_wire[2] = 2;
+        for (q = 0; q < NTRK; q++)
+            pb_wire[4u + q] = gen_set[q][o];
+    }
     if (o == PB_META_O) {                               /* CHAIN: per track the mask of the chained sequences (version 2) */
         pb_wire[2] = 2;
         for (q = 0; q < NTRK; q++)
@@ -120,9 +126,13 @@ static int pb_store_load(uint32_t s)
         pb_len[q] = len[q] >= (uint32_t)TP[P_SLEN].min && len[q] <= (uint32_t)TP[P_SLEN].max ? len[q] : (uint8_t)TP[P_SLEN].def;
     for (o = 0; o < PB_META_O; o++) {
         n = (uint32_t)st_load(OBJ_PB0 + s * PB_NOBJ + o, pb_wire, sizeof pb_wire);
-        if ((int)n == (int)(PB_HDR + PB_PER * PB_PAT_B) && pb_wire[0] == 'P' && pb_wire[1] == 'B' && pb_wire[2] == 1 &&
-            pb_wire[3] == o)
+        if ((int)n == (int)(PB_HDR + PB_PER * PB_PAT_B) && pb_wire[0] == 'P' && pb_wire[1] == 'B' &&
+            (pb_wire[2] == 1 || pb_wire[2] == 2) && pb_wire[3] == o) {
             memcpy(pb_pat[o * PB_PER], pb_wire + PB_HDR, PB_PER * PB_PAT_B);
+            if (o < GS_N && pb_wire[2] == 2)             /* GEN's knobs (1: stored before it: the defaults pb_reset_to_live set) */
+                for (t = 0; t < NTRK; t++)
+                    gen_set[t][o] = pb_wire[4u + t] < 128u ? pb_wire[4u + t] : gen_set[t][o];
+        }
     }
     for (t = 0; t < NTRK; t++) {            /* the sequence a track plays is the loaded music's (the record) */
         pb_cur[t] = cur[t];
@@ -184,8 +194,8 @@ static int pb_store_fetch(uint32_t s, uint32_t k, uint32_t q, step_t *st, uint8_
     }
     o = qi / PB_PER;
     n = (uint32_t)st_load(OBJ_PB0 + s * PB_NOBJ + o, pb_wire, sizeof pb_wire);
-    if ((int)n == (int)(PB_HDR + PB_PER * PB_PAT_B) && pb_wire[0] == 'P' && pb_wire[1] == 'B' && pb_wire[2] == 1 &&
-        pb_wire[3] == o)
+    if ((int)n == (int)(PB_HDR + PB_PER * PB_PAT_B) && pb_wire[0] == 'P' && pb_wire[1] == 'B' &&
+        (pb_wire[2] == 1 || pb_wire[2] == 2) && pb_wire[3] == o)
         (void)pb_unpack_pat(st, pb_wire + PB_HDR + (qi % PB_PER) * PB_PAT_B);
     return 0;
 }
